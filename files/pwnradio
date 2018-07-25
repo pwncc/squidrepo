@@ -1,0 +1,9 @@
+{
+  {
+    "installer",
+    "print(\"Installing.. program is named 'radio'\")\
+radio = fs.open(\"radio\", \"a\")\
+radio.writeLine(\"shell.run('pastebin run Y1bZ1bKx')\")\
+radio.close()",
+  },
+}
