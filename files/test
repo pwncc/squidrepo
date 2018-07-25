@@ -1,0 +1,10 @@
+{
+  {
+    "test",
+    "print(\"test\")",
+  },
+  {
+    "testfolder/testfile",
+    "print(\"hi\")",
+  },
+}
