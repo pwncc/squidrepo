@@ -1,0 +1,511 @@
+{
+  {
+    "modemShark/mSharkImg.img",
+    "\
+\
+                     44444\
+                      4   44\
+                       4    44\
+                       4      44\
+                    444         4444\
+                 444                4444\
+               44                       44\
+             44           4              4\
+    444444 44            4   444444     4\
+      4   4      444444 4   4      44444\
+       44      44      4 444\
+         4    4       444\
+          4  4\
+          4 4\
+           4",
+  },
+  {
+    "mShark",
+    "--vars\
+local _mShark_w, _mShark_h = term.getSize()\
+local pName = \"modemShark v3 - ZXCi\"\
+local sharking = true\
+local _mShark_slc = 0\
+local _mShark_tBack = 16\
+local _mShark_ttext = 32768\
+local _mShark_bCol = 32768\
+local _mShark_bImg = \"mSharkImg.img\"\
+local _mShark_mtext = 32768\
+local _mShark_mback = 16\
+local _mShark_images = \"modemShark/\"\
+local tBarText = \" [execute] \"\
+\
+local pMin, pMax, modemSide, userInput, logging, printing, frozen\
+\
+--tables\
+local tArgs = { ... }\
+local oPorts = { n=128 }\
+local _mShark_menu = {\
+[1] = {txt = \"\"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 1; cmd = function() _mShark_slc = 1 end; };\
+[2] = {txt = \" --------- \"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 2; cmd = function() end };\
+[3] = {txt = \" Sniffer > \"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 3; cmd = function(func) func() end };\
+[4] = {txt = \" Scanner > \"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 4; cmd = function(func) func() end };\
+[5] = {txt = \" SNF Log > \"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 5; cmd = function() shell.run(\"edit modemShark/snifferLogs\") end };\
+[6] = {txt = \" SCN Log > \"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 6; cmd = function() shell.run(\"edit modemShark/scannerLogs\") end };\
+[7] = {txt = \" Exit mS > \"; tcol = _mShark_mtext; bcol = _mShark_mback; x = 1; xx = 11; y = 7; cmd = function() sharking = false end; };\
+}\
+\
+--funcs\
+local function tb_draw()\
+        term.setCursorPos( 1,1 )\
+        term.setBackgroundColor( _mShark_tBack )\
+        term.setTextColor( _mShark_ttext )\
+        term.clearLine()\
+        print( tBarText )\
+        term.setCursorPos( math.floor( _mShark_w ) - #pName, 1 )\
+        print( pName )\
+end\
+\
+local function clear( bcol )\
+        term.setBackgroundColor( bcol )\
+        term.clear()\
+end\
+\
+local function drawScreen( bcol, bImage )\
+        clear( bcol )\
+        paintutils.drawImage( paintutils.loadImage( _mShark_images..bImage ), 1, 1 )\
+\
+        tb_draw()\
+end\
+\
+local function drawMenu( table )\
+        for k,v in pairs( table ) do \
+                term.setBackgroundColor( v.bcol )\
+                term.setTextColor( v.tcol )\
+                term.setCursorPos( v.x, v.y )\
+                print( v.txt )\
+        end\
+end\
+\
+local function writeSplashText( txt, yoffset )\
+        term.setBackgroundColor( _mShark_bCol )\
+        term.setTextColor( _mShark_tBack )\
+        term.setCursorPos( ( math.floor( ( _mShark_w - #txt ) / 2 ) ), math.floor( ( _mShark_h / 2) + (8 - yoffset) ) ) \
+        term.write(txt)\
+end\
+\
+function input()\
+        userInput = read()\
+end\
+\
+function listen()\
+        local lastID\
+\
+        while true do\
+                -- event, s, i, o, m, d\
+                local e = { os.pullEvent(\"modem_message\") }\
+                local x, y = term.getCursorPos()\
+                local logs\
+\
+                if printing then term.clearLine() term.setCursorPos(3,y) end\
+\
+                if logging then\
+                        logs = fs.open(\"modemShark/snifferLogs\",\"a\")\
+                        logs.writeLine(\"--- TRANSMISSION INTERCEPTED AT \"..os.time()..\" ---\")\
+                        if lastID == e[5].nMessageID then logs.writeLine(\"** suspected repeater **\") end\
+                        logs.writeLine('FRM: '..e[4]..'   TO: '..e[3]..'   DST: '..math.floor(e[6])..'   PTC: '..tostring(e[5].sProtocol))\
+                        logs.writeLine('MSG: '..tostring(e[5].message))\
+                        logs.close()\
+                end\
+\
+                if printing then\
+                        if not frozen then\
+                                print(\"--- TRANSMISSION INTERCEPTED ---\")\
+                                if lastID == e[5].nMessageID then print(\"** suspected repeater **\") end\
+                                print('FRM: '..e[4]..'   TO: '..e[3]..'   DST: '..math.floor(e[6])..'   PTC: '..tostring(e[5].sProtocol))\
+                                print('MSG: '..tostring(e[5].message))\
+                        end\
+                                local x, y = term.getCursorPos()\
+                                term.setCursorPos(1,y)\
+                                term.clearLine()\
+                                write(\"..>\")\
+                end\
+\
+                lastID = e[5].nMessageID\
+        end\
+end\
+\
+local function scan()\
+        -- the majority of this function written by Bomb Bloke\
+        local ping, rChans, tMessage = {}, {n=(pMax - pMin)}, {}\
+\
+        for n = pMin, pMax do\
+                ping[n] = math.random( 1, 2147483647 )\
+\
+                local tMessage = {\
+                nMessageID = ping[n],\
+                nRecipient = n,\
+                message = \"ayb\",\
+                sProtocol = \"abtu\"}\
+\
+                peripheral.call( modemSide, \"transmit\", n, n, tMessage )\
+        end\
+\
+        local myTimer = os.startTimer(1)   \
+                \
+        while true do\
+                local e = {os.pullEvent()}\
+                \
+                if printing then local x, y = term.getCursorPos() term.clearLine() term.setCursorPos(3,y) end\
+\
+                if e[1] == \"modem_message\" and ping[e[4]] and type(e[5]) == \"table\" and e[5].nMessageID == ping[e[4]] then\
+\
+                        rChans[#rChans + 1] = e[4]\
+                                \
+                elseif e[1] == \"timer\" and e[2] == myTimer then\
+                        break                                \
+                end\
+        end\
+\
+        if printing then  if not frozen then print(\"--- CHANNELS THAT RESPONDED ---\") end end\
+\
+        if #rChans > 0 then\
+                -- we don't want to open and put an ignored scan in the logs\
+                if logging then\
+                        logs = fs.open(\"modemShark/scannerLogs\",\"a\")\
+                        logs.writeLine(\"--- CHANNELS THAT RESPONDED AT \"..os.time()..\" ---\")\
+                        for i = 1, #rChans do logs.write(rChans[i] .. \", \") end\
+                        logs.write(\"\\n\")\
+                        logs.close()\
+                end \
+\
+                if printing then \
+                        if not frozen then\
+                                for i = 1, #rChans do write(rChans[i] .. \", \") end \
+                        end\
+                end\
+        else\
+                if printing then if not frozen then write(\"no channels responded across channel range\") end end\
+        end\
+        \
+        if printing then if not frozen then local x, y = term.getCursorPos() term.setCursorPos(1,y) write(\"\\n..>\") end end\
+        \
+        sleep(10)\
+end\
+\
+function pClose()\
+        local n = 0-- counter to 128\
+        for i=1,65535 do\
+ \
+                if modem.isOpen(i) then\
+                        oPorts[n]=i\
+                        modem.close(i)\
+                        n = n+1\
+                end\
+                if n == 127 then break; end -- max open = 128, so if 128, stop\
+        end\
+end\
+\
+function pOpen(min,max)\
+        for i=min,max do i=modem.open(i) end\
+end\
+\
+function pRestore()\
+        for i=1,65535 do modem.close(i) end\
+\
+        for i=0,127 do \
+                if oPorts[i] then modem.open(oPorts[i]) end\
+        end\
+end\
+\
+function getSettings(type)\
+        local valid = false\
+        local x,y\
+        local clear = function()\
+                term.setCursorPos(x,y)\
+                term.write(\"                                   \")\
+                term.setCursorPos(x,y)\
+        end\
+        term.setBackgroundColor( _mShark_bCol )\
+        term.setTextColor( _mShark_tBack )\
+        term.setCursorPos( ( math.floor( ( _mShark_w - 20 ) / 2 ) ), math.floor( ( _mShark_h / 2) - 4 ) )\
+        write(type..\" parameters: \")\
+\
+        term.setCursorPos( ( math.floor( ( _mShark_w - 11 ) / 3 ) ), math.floor( ( _mShark_h / 2) - 2 ) )\
+        term.write(\"Lower port: \")\
+        x, y = term.getCursorPos()\
+\
+        repeat\
+                clear()\
+                pMin = tonumber( read() )\
+                if pMin ~= nil then\
+                        if pMin >= 1 and pMin <= 65535 then valid = true end\
+                end\
+        until valid\
+        valid = false\
+\
+        term.setCursorPos( ( math.floor( ( _mShark_w - 11 ) / 3 ) ), math.floor( ( _mShark_h / 2) ) )\
+        term.write(\"Upper port: \")\
+        x, y = term.getCursorPos()\
+\
+        repeat\
+                clear()\
+                pMax = tonumber( read() )\
+                if pMax ~= nil then\
+                        if pMax >= 1 and pMax <= 65535 and (pMax - pMin) <= 127 and (pMax - pMin) >= 0 then valid = true end\
+                end\
+        until valid\
+        valid = false\
+\
+        term.setCursorPos( ( math.floor( ( _mShark_w - 11 ) / 3 ) ), math.floor( ( _mShark_h / 2) + 2) )\
+        term.write(\"Modem side? \")\
+        x, y = term.getCursorPos()\
+        \
+        repeat\
+                clear()\
+                modemSide = read()\
+                if peripheral.isPresent(modemSide) then valid = true end\
+        until valid\
+        valid = false\
+\
+\
+        term.setCursorPos( ( math.floor( ( _mShark_w - 11 ) / 3 ) ), math.floor( ( _mShark_h / 2) + 4) )\
+        term.write(\"Display it? \")\
+        x, y = term.getCursorPos()\
+        \
+        repeat\
+                clear()\
+                printing = string.upper( tostring( read() ) )\
+                if printing == \"YES\" or printing == \"Y\" then printing = true valid = true \
+                elseif printing ==\"NO\" or printing == \"N\" then printing = false valid = true \
+                end\
+        until valid\
+        valid = false\
+\
+        term.setCursorPos( ( math.floor( ( _mShark_w - 11 ) / 3 ) ), math.floor( ( _mShark_h / 2) + 6) )\
+        term.write(\"Log it? \")\
+        x, y = term.getCursorPos()\
+        \
+        repeat\
+                clear()\
+                logging = string.upper( tostring( read() ) )\
+                if logging == \"YES\" or logging == \"Y\" then logging = true valid = true \
+                elseif logging ==\"NO\" or logging == \"N\" then logging = false valid = true \
+                end\
+        until valid\
+        valid = false\
+end\
+\
+local function initListen()\
+        if #tArgs == 0 then getSettings(\"Sniffer\") end\
+\
+        if modemSide ~= nil then\
+                        modem = peripheral.wrap(modemSide)\
+                        else modem = peripheral.wrap(\"back\")\
+        end \
+\
+        local logs\
+\
+        if logging then\
+                if not fs.exists(\"modemShark/snifferLogs\") then \
+                        logs = fs.open(\"modemShark/snifferLogs\",\"w\")\
+                        logs.writeLine(\" --- Init sniffer log at \"..os.time()..\" --- \")\
+                        logs.close()\
+                end\
+        end\
+\
+        local prepScreen = function()\
+        term.clear()\
+        term.setCursorPos(1,1)\
+        print(\"Listening to ports \"..pMin..\"-\"..pMax)\
+        end -- end prepScreen\
+        \
+        pClose()\
+        pOpen(pMin, pMax)\
+\
+        if printing then prepScreen()\
+        else \
+                drawScreen( _mShark_bCol, _mShark_bImg )\
+                writeSplashText( \"Sniffing Traffic\", 1 )\
+                term.setCursorPos( ( math.floor( ( _mShark_w - 16 ) / 2 ) ), math.floor( ( _mShark_h / 2) + 8) )\
+        end\
+        write(\"..>\")\
+        \
+        repeat\
+                userInput = nil\
+                parallel.waitForAny(listen, input)\
+                if userInput == \"clear\" then prepScreen() end\
+                if userInput == \"freeze\" then frozen = true end\
+                if userInput == \"unfreeze\" then frozen = false end\
+                if userInput ~= \"stop\" and userInput ~= \"quit\" then \
+                        if not printing then term.setCursorPos( ( math.floor( ( _mShark_w - 16 ) / 2 ) ), math.floor( ( _mShark_h / 2) + 9) ) end\
+                        term.clearLine()\
+                        write(\"..>\") \
+                end\
+                if userInput == \"quit\" then pRestore() sharking = false break; end\
+        until userInput == \"stop\" -- stop breaks the loop \
+\
+        pRestore()\
+\
+        --clear screen if we're stopping without the GUI\
+        if #tArgs == 0 then\
+                term.setTextColor(colors.white)\
+                term.setBackgroundColor(colors.black)\
+                term.clear()\
+                term.setCursorPos(1,1)\
+        end\
+end\
+\
+local function initScan()\
+        if #tArgs == 0 then getSettings(\"Scanner\") end\
+\
+        if logging then\
+                if not fs.exists(\"modemShark/scannerLogs\") then \
+                        logs = fs.open(\"modemShark/scannerLogs\",\"w\")\
+                        logs.writeLine(\" --- Init scanner log at \"..os.time()..\" --- \")\
+                        logs.close()\
+                end\
+        end\
+\
+        local prepScreen = function()\
+        term.clear()\
+        term.setCursorPos(1,1)\
+        print(\"Scanning ports \"..pMin..\"-\"..pMax)\
+        end -- end prepScreen\
+\
+        pClose()\
+        pOpen(pMin, pMax)\
+                \
+        if printing then prepScreen()\
+        else \
+                drawScreen( _mShark_bCol, _mShark_bImg )\
+                term.setBackgroundColor( _mShark_bCol )\
+                term.setTextColor( _mShark_tBack )\
+                writeSplashText( \"Scanning Traffic\", 1 )\
+                term.setCursorPos( ( math.floor( ( _mShark_w - 16 ) / 2 ) ), math.floor( ( _mShark_h / 2) + 8) )\
+        end\
+        write(\"..>\")\
+                \
+        repeat\
+                userInput = nil\
+                parallel.waitForAny(scan, input)\
+                if userInput == \"clear\" then prepScreen() end\
+                if userInput == \"freeze\" then frozen = true end\
+                if userInput == \"unfreeze\" then frozen = false end\
+                if userInput ~= \"stop\"  and userInput ~= \"quit\" then \
+                        if not printing then term.setCursorPos( ( math.floor( ( _mShark_w - 16 ) / 2 ) ), math.floor( ( _mShark_h / 2) + 9) ) end\
+                        term.clearLine()\
+                        write(\"..>\") \
+                end\
+                if userInput == \"quit\" then pRestore() sharking = false break; end\
+        until userInput == \"stop\" -- stop breaks the loop \
+\
+        pRestore()\
+\
+        --clear screen if we're stopping without the GUI\
+        if #tArgs == 0 then\
+                term.setTextColor(colors.white)\
+                term.setBackgroundColor(colors.black)\
+                term.clear()\
+                term.setCursorPos(1,1)\
+        end\
+end\
+\
+local function menuClick()\
+        for k,v in pairs( _mShark_menu ) do\
+                if event[1] == \"mouse_click\" then\
+                        if event[2] == 1 then\
+                                if event[3] >= v.x and event[3] <= v.xx and event[4] == v.y then\
+                                        if event[4] == 3 then\
+                                                tBarText = \" Sharking \"\
+                                                tb_draw()\
+                                                v.cmd(initListen)\
+                                                tBarText = \" [execute] \"\
+                                        elseif event[4] == 4 then\
+                                                tBarText = \" Sharking \"\
+                                                tb_draw()\
+                                                v.cmd(initScan)\
+                                                tBarText = \" [execute] \"\
+                                        else v.cmd() \
+                                        end\
+                                else \
+                                        _mShark_slc = 0 \
+                                        clear( _mShark_bCol ) \
+                                        tb_draw()\
+                                end\
+                        end\
+                end\
+        end\
+end\
+\
+-- if no args were supplied, then we aren't running\
+-- without the GUI\
+if #tArgs == 0 then\
+        drawScreen( _mShark_bCol, _mShark_bImg )\
+        writeSplashText( \"Idle\", 1 )\
+\
+        while sharking do\
+                event = { os.pullEvent() }\
+                if _mShark_slc == 0 then\
+                        drawScreen( _mShark_bCol, _mShark_bImg )\
+                        writeSplashText( \"Idle\", 1 )\
+\
+                        if event[1] == \"mouse_click\" then\
+                                if event[2] == 1 then\
+                                        if event[3] >= 1 and event[3] <= 9 and event[4] == 1 then\
+                                                _mShark_slc = 1\
+                                                drawMenu( _mShark_menu )\
+                                        end\
+                                end\
+                        end\
+                        sleep(.1)\
+                elseif _mShark_slc == 1 then\
+                        menuClick()\
+                end\
+        end\
+        term.setTextColor(colors.white)\
+        term.setBackgroundColor(colors.black)\
+        term.clear()\
+        term.setCursorPos(1,1)\
+else\
+        local arguments = ( table.concat( tArgs, \" \" ) )\
+        local mode \
+\
+        -- setting these so the print comes out the right color\
+        term.setBackgroundColor( _mShark_bCol )\
+        term.setTextColor( _mShark_tBack )\
+\
+        -- look for the three optional flags\
+        if string.find( arguments, \"-log\" ) then logging = true else logging = false end\
+        if string.find( arguments, \"-dsp\" ) then printing = false else printing = true end\
+        if string.find( arguments, \"-scan\" ) then mode = \"scan\" else mode = \"listen\" end\
+\
+        -- look for \"(number\") or \"(number)-(number)\"\
+        if string.match( arguments, \"(%d+)[-](%d+)\" ) then\
+                pMin, pMax = string.match( arguments, \"(%d+)[-](%d+)\" )\
+                pMin = tonumber( pMin )\
+                pMax = tonumber( pMax )\
+        elseif string.match( arguments, \"(%d+)\" ) then\
+                pMin = tonumber( string.match( arguments, \"(%d+)\" ) )\
+                pMax = pMin\
+        else\
+                error(\"No channels were supplied\")\
+        end\
+\
+        -- verify the channel range\
+        if pMin < 1 or pMin > 65535 then\
+                error(\"Channels must be between 1-65535\")\
+        elseif pMax < 1 or pMax > 65535 then\
+                error(\"Channels must be between 1-65535\")\
+        elseif pMax < pMin then\
+                error(\"Upper channel range must be above lower channel range\")\
+        elseif pMax - pMin > 127 then\
+                error(\"Channel range was greater than 128\")\
+        end\
+\
+        -- look for \" (letters)\"\
+        if string.match( arguments, \"%s(%a+)\" ) then modemSide = string.match( arguments, \"%s(%a+)\" ) end\
+        \
+        -- fix the menubar text\
+        tBarText = \" Sharking \"\
+\
+        --all variables are now set, begin\
+        if mode == \"scan\" then initScan() elseif mode == \"listen\" then initListen() end\
+end",
+  },
+}
