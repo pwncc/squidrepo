@@ -2463,9 +2463,22 @@ return {\
   },
   {
     "installer",
-    "h = fs.open(\"startup\", \"a\")\
+    "if fs.exists(\"startup\") then\
+h = fs.open(\"startup\", \"a\")\
+else\
+h = fs.open(\"startup\", \"w\")\
+end\
 h.writeLine(\"shell.run('mbs startup')\")\
-h.close()",
+h.close()\
+term.clear()\
+print(\"MBS Installed.. Would you like to restart?\")\
+print(\"     y/n\")\
+local inf = read()\
+if inf == \"y\" then\
+os.reboot()\
+else\
+print(\"ok\")\
+end",
   },
   {
     "mbs",
