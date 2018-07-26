@@ -1,0 +1,192 @@
+{
+  {
+    "package",
+    "--Variables\
+local func = {}\
+--Functions\
+\
+\
+--file2table library\
+function readFile(path,table)\
+    local index = 1\
+    h = fs.open(path,\"r\")\
+    l = h.readLine()\
+    while (l ~= nil) do\
+       l = h.readLine()\
+       table[index] = l\
+       index = index + 1\
+    end\
+    h.close()\
+    h = fs.open(path,\"r\")\
+    table[\"content\"] = h.readAll()\
+    h.close()\
+end\
+function loadFiles(table,...)\
+    for i=1,#arg do\
+        table[i] = {}\
+        file2table.readFile(arg[i],table[i])\
+    end\
+end\
+\
+\
+local isGood = function(a,b)\
+    if ((not a) or (not b)) then\
+        error(\"pack/unpack <input> <output>\")\
+    end\
+    if not fs.exists(a) then\
+        error(\"Invalid input location\")\
+    end\
+end\
+local subList = function(l,a,b)\
+    local out = {}\
+    for i = a,b do\
+        out[#out+1] = l[i]\
+    end\
+    return out\
+end\
+local joinL = function(...)\
+    local lists = {...}\
+    local out = {}\
+    for a = 1,#lists do\
+        for b = 1,#lists[a] do\
+            out[#out+1] = lists[a][b]\
+        end\
+    end\
+    return out\
+end\
+local replList = function(a,i,b)\
+    local l1 = subList(a,1,i-1)\
+    local l2 = subList(a,i+1,#a)\
+    return joinL(l1,b,l2)\
+end\
+local getSub\
+getSub = function(path,extra)\
+    local l = fs.list(path)\
+    local offset = 0\
+    for a = 1,#l do\
+        i = a+offset\
+        --print(fs.combine(path,l[i]),fs.isDir(fs.combine(path,l[i])))\
+        if fs.isDir(fs.combine(path,l[i])) then\
+            local oldlen = #l\
+            l = replList(l,i,getSub(fs.combine(path,l[i]),fs.combine(extra,l[i])))\
+            offset = offset+(#l-oldlen)\
+        else\
+            l[i] = fs.combine(extra,l[i])\
+        end\
+    end\
+    return l\
+end\
+function pack(inp,out,data)\
+    isGood(inp,out)\
+    local files = getSub(inp,\"\")\
+    local output = {}\
+    output.meta = data\
+    for i = 1,#files do\
+        local f = fs.open(fs.combine(inp,files[i]),\"r\")\
+        local str = f.readAll()\
+        f.close()\
+        output[#output+1] = {files[i],str}\
+    end\
+    local f = fs.open(out,\"w\")\
+    f.write(textutils.serialize(output))\
+    f.close()\
+end\
+\
+local tArgs = {...}\
+local metatable = {}\
+print(\"Use like the following. package (inputfolder) (outputfile) (dependencies file) (info file)\")\
+\
+if fs.exists(tArgs[3]) and fs.exists(tArgs[4]) then\
+metatable[\"dependencies\"] = fs.open(tArgs[3], \"r\").readAll()\
+metatable[\"info\"] = fs.open(tArgs[4], \"r\").readAll()\
+print(\"Packing..\")\
+pack(tArgs[1], tArgs[2], metatable)\
+else\
+print(\"One file doesnt exist!\")\
+end",
+  },
+  {
+    "unpackage",
+    "local function isGood(a,b)\
+    if ((not a) or (not b)) then\
+        error(\"pack/unpack <input> <output>\")\
+    end\
+    if not fs.exists(a) then\
+        error(\"Invalid input location\")\
+    end\
+end\
+local function subList(l,a,b)\
+    local out = {}\
+    for i = a,b do\
+        out[#out+1] = l[i]\
+    end\
+    return out\
+end\
+local function joinL(...)\
+    local lists = {...}\
+    local out = {}\
+    for a = 1,#lists do\
+        for b = 1,#lists[a] do\
+            out[#out+1] = lists[a][b]\
+        end\
+    end\
+    return out\
+end\
+local function replList(a,i,b)\
+    local l1 = subList(a,1,i-1)\
+    local l2 = subList(a,i+1,#a)\
+    return joinL(l1,b,l2)\
+end\
+function getSub(path,extra)\
+    local l = fs.list(path)\
+    local offset = 0\
+    for a = 1,#l do\
+        i = a+offset\
+        --print(fs.combine(path,l[i]),fs.isDir(fs.combine(path,l[i])))\
+        if fs.isDir(fs.combine(path,l[i])) then\
+            local oldlen = #l\
+            l = replList(l,i,getSub(fs.combine(path,l[i]),fs.combine(extra,l[i])))\
+            offset = offset+(#l-oldlen)\
+        else\
+            l[i] = fs.combine(extra,l[i])\
+        end\
+    end\
+    return l\
+end\
+function pack(inp,out)\
+    isGood(inp,out)\
+    local files = getSub(inp,\"\")\
+    local output = {}\
+    for i = 1,#files do\
+        local f = fs.open(fs.combine(inp,files[i]),\"r\")\
+        local str = f.readAll()\
+        f.close()\
+        output[#output+1] = {files[i],str}\
+    end\
+    local f = fs.open(out,\"w\")\
+    f.write(textutils.serialize(output))\
+    f.close()\
+end\
+local function unpack(inp,out)\
+    isGood(inp,out)\
+    local f = fs.open(inp,\"r\")\
+    local tbl = textutils.unserialize(f.readAll())\
+    f.close()\
+    for i = 1,#tbl do\
+        local f = fs.open(fs.combine(out,tbl[i][1]),\"w\")\
+        f.write(tbl[i][2])\
+        f.close()\
+    end\
+end\
+local tArgs = {...}\
+unpack(tArgs[1], tArgs[2])",
+  },
+  meta = {
+    dependencies = "latest puplib",
+    info = "Packager and unpackager for pydo.\
+with packager you are able to pack a folder with\
+different files. This is the way we install your\
+programs.\
+",
+  },
+}
