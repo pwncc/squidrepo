@@ -1,0 +1,2750 @@
+{
+  {
+    ".mbs/bin/clear.lua",
+    "local _, y = term.getCursorPos()\
+\
+term.scroll(y - 1)\
+term.setCursorPos(1, 1)",
+  },
+  {
+    ".mbs/bin/help.lua",
+    "local topic = ... or \"intro\"\
+\
+if topic == \"index\" then\
+  print(\"Help topics availiable:\")\
+  textutils.pagedTabulate(help.topics())\
+else\
+  local file_name = help.lookup(topic)\
+  if not file_name then error(\"No help available\", 0) end\
+\
+  local file = fs.open(file_name, \"r\")\
+  -- Shouldn't happen, but nice to handle anyway\
+  if not file then error(\"No help available\", 0) end\
+\
+  local contents = file.readAll()\
+  file.close()\
+\
+  local _, height = term.getCursorPos()\
+  textutils.pagedPrint(contents, height - 3)\
+end",
+  },
+  {
+    ".mbs/bin/lua.lua",
+    "if select('#', ...) > 0 then\
+  print(\"This is an interactive Lua prompt.\")\
+  print(\"To run a lua program, just type its name.\")\
+  return\
+end\
+\
+local keywords = {\
+  [ \"and\" ] = true, [ \"break\" ] = true, [ \"do\" ] = true, [ \"else\" ] = true,\
+  [ \"elseif\" ] = true, [ \"end\" ] = true, [ \"false\" ] = true, [ \"for\" ] = true,\
+  [ \"function\" ] = true, [ \"if\" ] = true, [ \"in\" ] = true, [ \"local\" ] = true,\
+  [ \"nil\" ] = true, [ \"not\" ] = true, [ \"or\" ] = true, [ \"repeat\" ] = true, [ \"return\" ] = true,\
+  [ \"then\" ] = true, [ \"true\" ] = true, [ \"until\" ] = true, [ \"while\" ] = true,\
+}\
+\
+local function write_with(colour, text)\
+  term.setTextColour(colour)\
+  write(text)\
+end\
+\
+local function pretty_sort(a, b)\
+  local ta, tb = type(a), type(b)\
+\
+  if ta == \"string\" then return tb ~= \"string\" or a < b\
+  elseif tb == \"string\" then return false\
+  end\
+\
+  if ta == \"number\" then return tb ~= \"number\" or a < b end\
+  return false\
+end\
+\
+local debug_info = type(debug) == \"table\" and type(debug.getinfo) == \"function\" and debug.getinfo\
+local function pretty_function(fn)\
+  if debug_info then\
+    local info = debug_info(fn, \"S\")\
+    if info.short_src and info.linedefined and info.linedefined >= 1 then\
+      return \"function<\" .. info.short_src .. \":\" .. info.linedefined .. \">\"\
+    end\
+  end\
+\
+  return tostring(fn)\
+end\
+\
+local function pretty_size(obj, tracking, limit)\
+  local obj_type = type(obj)\
+  if obj_type == \"string\" then return #string.format(\"%q\", obj):gsub(\"\\\\\\n\", \"\\\\n\")\
+  elseif obj_type == \"function\" then return #pretty_function(obj)\
+  elseif obj_type ~= \"table\" or tracking[obj] then return #tostring(obj) end\
+\
+  local count = 2\
+  tracking[obj] = true\
+  for k, v in pairs(obj) do\
+    count = count + pretty_size(k, tracking, limit) + pretty_size(v, tracking, limit)\
+    if count >= limit then break end\
+  end\
+  tracking[obj] = nil\
+  return count\
+end\
+\
+local function pretty_impl(obj, tracking, width, height, indent, tuple_length)\
+  local obj_type = type(obj)\
+  if obj_type == \"string\" then\
+    local formatted = string.format(\"%q\", obj):gsub(\"\\\\\\n\", \"\\\\n\")\
+\
+    -- Strings are limited to the size of the current buffer with a bit of padding\
+    local limit = math.max(8, math.floor(width * height * 0.8))\
+    if #formatted > limit then\
+      write_with(colours.red, formatted:sub(1, limit - 3))\
+      write_with(colours.grey, \"...\")\
+    else\
+      write_with(colours.red, formatted)\
+    end\
+    return\
+  elseif obj_type == \"number\" then\
+    return write_with(colours.magenta, tostring(obj))\
+  elseif obj_type == \"function\" then\
+    return write_with(colours.lightGrey, pretty_function(obj))\
+  elseif obj_type ~= \"table\" or tracking[obj] then\
+    return write_with(colours.lightGrey, tostring(obj))\
+  elseif (getmetatable(obj) or {}).__tostring then\
+    return write_with(colours.white, tostring(obj))\
+  end\
+\
+  local open, close = \"{\", \"}\"\
+  if tuple_length then open, close = \"(\", \")\" end\
+\
+  if (tuple_length == nil or tuple_length == 0) and next(obj) == nil then\
+    return write_with(colours.white, open .. close)\
+  elseif width <= 7 then\
+    write_with(colours.white, open) write_with(colours.grey, \" ... \") write_with(colours.white, close)\
+    return\
+  end\
+\
+  local should_newline = false\
+  local length = tuple_length or #obj\
+\
+  -- Compute the \"size\" of this object and how many children it has.\
+  local size, children, keys, kn = 2, 0, {}, 0\
+  for k, v in pairs(obj) do\
+    if type(k) == \"number\" and k >= 1 and k <= length and k % 1 == 0 then\
+      local vs = pretty_size(v, tracking, width)\
+      size = size + vs + 2\
+      children = children + 1\
+    else\
+      kn = kn + 1\
+      keys[kn] = k\
+\
+      local vs, ks = pretty_size(v, tracking, width), pretty_size(k, tracking, width)\
+      size = size + vs + ks + 2\
+      children = children + 2\
+    end\
+\
+    -- Some aribtrary scale factor to stop long lines filling too much of the\
+    -- screen\
+    if size >= width * 0.6 then should_newline = true end\
+  end\
+\
+  -- If we want to have multiple lines, but don't fit in one then abort!\
+  if should_newline and height <= 1 then\
+    write_with(colours.white, open) write_with(colours.grey, \" ... \") write_with(colours.white, close)\
+    return\
+  end\
+\
+  -- Make sure our keys are in some sort of sensible order\
+  table.sort(keys, pretty_sort)\
+\
+  local next_newline, sub_indent, child_width, child_height\
+  if should_newline then\
+    next_newline, sub_indent = \",\\n\", indent .. \" \"\
+\
+    -- We split our height over multiple items. A future improvement could be to\
+    -- give more \"height\" to complex elements (such as tables)\
+    height = height - 2\
+    child_width, child_height = width - 2, math.ceil(height / children)\
+\
+    -- If there's more children then we have space then\
+    if children > height then children = height - 2 end\
+  else\
+    next_newline, sub_indent =  \", \", \"\"\
+\
+    -- Like multi-line elements, we share the width across multiple children\
+    width = width - 2\
+    child_width, child_height = math.ceil(width / children), 1\
+  end\
+\
+  write_with(colours.white, open .. (should_newline and \"\\n\" or \" \"))\
+\
+  tracking[obj] = true\
+  local seen = {}\
+  local first = true\
+  for k = 1, length do\
+    if not first then write_with(colours.white, next_newline) else first = false end\
+    write_with(colours.white, sub_indent)\
+\
+    seen[k] = true\
+    pretty_impl(obj[k], tracking, child_width, child_height, sub_indent)\
+\
+    children = children - 1\
+    if children < 0 then\
+      if not first then write_with(colours.white, next_newline) else first = false end\
+      write_with(colours.grey, sub_indent .. \"...\")\
+      break\
+    end\
+  end\
+\
+  for i = 1, kn do\
+    local k, v = keys[i], obj[keys[i]]\
+    if not seen[k] then\
+      if not first then write_with(colours.white, next_newline) else first = false end\
+      write_with(colours.white, sub_indent)\
+\
+      if type(k) == \"string\" and not keywords[k] and string.match( k, \"^[%a_][%a%d_]*$\" ) then\
+        write_with(colours.white, k .. \" = \")\
+        pretty_impl(v, tracking, child_width, child_height, sub_indent)\
+      else\
+        write_with(colours.white, \"[\")\
+        pretty_impl(k, tracking, child_width, child_height, sub_indent)\
+        write_with(colours.white, \"] = \")\
+        pretty_impl(v, tracking, child_width, child_height, sub_indent)\
+      end\
+\
+      children = children - 1\
+      if children < 0 then\
+        if not first then write_with(colours.white, next_newline) else first = false end\
+        write_with(colours.grey, sub_indent .. \"...\")\
+        break\
+      end\
+    end\
+  end\
+  tracking[obj] = nil\
+\
+  write_with(colours.white, (should_newline and \"\\n\" .. indent or \" \") .. (tuple_length and \")\" or \"}\"))\
+end\
+\
+local function pretty(t, n)\
+  local width, height = term.getSize()\
+  local fit_height = settings.get(\"mbs.lua.pretty_height\", true)\
+  if type(fit_height) == \"number\" then height = fit_height\
+  elseif fit_height == false then height = 1/0 end\
+  return pretty_impl(t, {}, width, height - 2, \"\", n)\
+end\
+\
+local running = true\
+local history = {}\
+local counter = 1\
+local output = {}\
+\
+local environment = setmetatable({\
+  exit = setmetatable({}, {\
+    __tostring = function() return \"Call exit() to exit\" end,\
+    __call = function() running = false end,\
+  }),\
+\
+  _noTail = function(...) return ... end,\
+\
+  out = output,\
+}, { __index = _ENV })\
+\
+local input_colour, output_colour, text_colour = colours.green, colours.cyan, term.getTextColour()\
+if not term.isColour() then\
+  input_colour, output_colour = colours.white, colours.white\
+end\
+\
+local autocomplete = nil\
+if not settings or settings.get(\"lua.autocomplete\") then\
+  autocomplete = function(line)\
+    local start = line:find(\"[a-zA-Z0-9_%.:]+$\")\
+    if start then\
+      line = line:sub(start)\
+    end\
+    if #line > 0 then\
+      return textutils.complete(line, environment)\
+    end\
+  end\
+end\
+\
+local history_file = settings.get(\"mbs.lua.history_file\", \".lua_history\")\
+if history_file and fs.exists(history_file) then\
+  local handle = fs.open(history_file, \"r\")\
+  if handle then\
+    for line in handle.readLine do history[#history + 1] = line end\
+    handle.close()\
+  end\
+end\
+\
+local function set_output(out, length)\
+  environment._ = out\
+  environment['_' .. counter] = out\
+  output[counter] = out\
+\
+  term.setTextColour(output_colour)\
+  write(\"out[\" .. counter .. \"]: \")\
+  term.setTextColour(text_colour)\
+\
+  if type(out) == \"table\" then\
+    print(pretty(out, length))\
+  else\
+    print(pretty(out))\
+  end\
+end\
+\
+--- Handle the result of the function\
+local function handle(force_print, success, ...)\
+  if success then\
+    local len = select('#', ...)\
+    if len == 0 then\
+      if force_print then\
+        set_output(nil)\
+      end\
+    elseif len == 1 then\
+      set_output(...)\
+    else\
+      set_output({...}, len)\
+    end\
+  else\
+    printError(...)\
+  end\
+end\
+\
+if type(package) == \"table\" and type(package.path) == \"string\" then\
+  -- Attempt to determine the shell directory with leading and trailing slashes\
+  local dir = shell.dir()\
+  if dir:sub(1, 1) ~= \"/\" then dir = \"/\" .. dir end\
+  if dir:sub(#dir, #dir) ~= \"/\" then dir = dir .. \"/\" end\
+\
+  -- Strip the default \"current program\" package path\
+  local strip_path = \"?;?.lua;?/init.lua;\"\
+  local path = package.path\
+  if path:sub(1, #strip_path) == strip_path then path = path:sub(#strip_path + 1) end\
+\
+  -- And append the current directory to the package path\
+  package.path = dir .. \"?;\" .. dir .. \"?.lua;\" .. dir .. \"?/init.lua;\" .. path\
+end\
+\
+while running do\
+  term.setTextColour(input_colour)\
+  term.write(\"in [\" .. counter .. \"]: \")\
+  term.setTextColour(text_colour)\
+\
+  local line = read(nil, history, autocomplete)\
+  if not line then break end\
+\
+  if line:find(\"%S\") then\
+    if line ~= history[#history] then\
+      -- Add item to history\
+      history[#history + 1] = line\
+\
+      -- Remove extra items from history\
+      local max = tonumber(settings.get(\"mbs.lua.history_max\", 1e4)) or 1e4\
+      while #history > max do table.remove(history, 1) end\
+\
+      -- Write history file\
+      local history_file = settings.get(\"mbs.lua.history_file\", \".lua_history\")\
+      if history_file then\
+        local handle = fs.open(history_file, \"w\")\
+        if handle then\
+          for i = 1, #history do handle.writeLine(history[i]) end\
+          handle.close()\
+        end\
+      end\
+    end\
+\
+    local force_print = true\
+    local func, e = load(\"return \" .. line, \"=lua\", \"t\", environment)\
+    if not func then\
+      func, e = load(line, \"=lua\", \"t\", environment)\
+      force_print = false\
+    else\
+      func, e = load(\"return _noTail(\" .. line .. \")\", \"=lua\", \"t\", environment)\
+    end\
+\
+    if func then\
+      if settings.get(\"mbs.lua.traceback\", true) then\
+        handle(force_print, stack_trace.xpcall_with(func))\
+      else\
+        handle(force_print, pcall(func))\
+      end\
+    else\
+      printError(e)\
+    end\
+\
+    counter = counter + 1\
+  end\
+end",
+  },
+  {
+    ".mbs/bin/shell.lua",
+    "\
+local multishell = multishell\
+local parentShell = shell\
+\
+if multishell then\
+  multishell.setTitle(multishell.getCurrent(), \"shell\")\
+end\
+\
+local bExit = false\
+local sDir = (parentShell and parentShell.dir()) or \"\"\
+local sPath = (parentShell and parentShell.path()) or \".:/rom/programs\"\
+local tAliases = (parentShell and parentShell.aliases()) or {}\
+local tCompletionInfo = (parentShell and parentShell.getCompletionInfo()) or {}\
+local tProgramStack = {}\
+local history = parentShell and type(parentShell.history) == \"function\" and parentShell.history()\
+local fCustomRead = read\
+\
+local shell = {}\
+local function createShellEnv(sDir)\
+  local tEnv = {}\
+  tEnv[\"shell\"] = shell\
+  tEnv[\"multishell\"] = multishell\
+  tEnv[\"read\"] = fCustomRead\
+\
+  local package = {}\
+  package.loaded = {\
+    _G = _G,\
+    bit32 = bit32,\
+    coroutine = coroutine,\
+    math = math,\
+    package = package,\
+    string = string,\
+    table = table,\
+  }\
+  package.path = \"?;?.lua;?/init.lua;/rom/modules/main/?;/rom/modules/main/?.lua;/rom/modules/main/?/init.lua\"\
+  if turtle then\
+    package.path = package.path..\";/rom/modules/turtle/?;/rom/modules/turtle/?.lua;/rom/modules/turtle/?/init.lua\"\
+  elseif command then\
+    package.path = package.path..\";/rom/modules/command/?;/rom/modules/command/?.lua;/rom/modules/command/?/init.lua\"\
+  end\
+  package.config = \"/\\n;\\n?\\n!\\n-\"\
+  package.preload = {}\
+  package.loaders = {\
+    function(name)\
+      if package.preload[name] then\
+        return package.preload[name]\
+      else\
+        return nil, \"no field package.preload['\" .. name .. \"']\"\
+      end\
+    end,\
+    function(name)\
+      local fname = string.gsub(name, \"%.\", \"/\")\
+      local sError = \"\"\
+      for pattern in string.gmatch(package.path, \"[^;]+\") do\
+        local sPath = string.gsub(pattern, \"%?\", fname)\
+        if sPath:sub(1,1) ~= \"/\" then\
+          sPath = fs.combine(sDir, sPath)\
+        end\
+        if fs.exists(sPath) and not fs.isDir(sPath) then\
+          local fnFile, sError = loadfile(sPath, tEnv)\
+          if fnFile then\
+            return fnFile, sPath\
+          else\
+            return nil, sError\
+          end\
+        else\
+          if #sError > 0 then\
+            sError = sError .. \"\\n\"\
+          end\
+          sError = sError .. \"no file '\" .. sPath .. \"'\"\
+        end\
+      end\
+      return nil, sError\
+    end\
+  }\
+\
+  local sentinel = {}\
+  local function require(name)\
+    if type(name) ~= \"string\" then\
+      error(\"bad argument #1 (expected string, got \" .. type(name) .. \")\", 2)\
+    end\
+    if package.loaded[name] == sentinel then\
+      error(\"Loop detected requiring '\" .. name .. \"'\", 0)\
+    end\
+    if package.loaded[name] then\
+      return package.loaded[name]\
+    end\
+\
+    local sError = \"Error loading module '\" .. name .. \"':\"\
+    for _, searcher in ipairs(package.loaders) do\
+      local loader, err = searcher(name)\
+      if loader then\
+        package.loaded[name] = sentinel\
+        local result = loader(err)\
+        if result ~= nil then\
+          package.loaded[name] = result\
+          return result\
+        else\
+          package.loaded[name] = true\
+          return true\
+        end\
+      else\
+        sError = sError .. \"\\n\" .. err\
+      end\
+    end\
+    error(sError, 2)\
+  end\
+\
+  tEnv[\"package\"] = package\
+  tEnv[\"require\"] = require\
+\
+  return tEnv\
+end\
+\
+-- Colours\
+local promptColour, textColour, bgColour\
+if term.isColour() then\
+  promptColour = colours.yellow\
+  textColour = colours.white\
+  bgColour = colours.black\
+else\
+  promptColour = colours.white\
+  textColour = colours.white\
+  bgColour = colours.black\
+end\
+\
+local function run(_sCommand, ...)\
+  local sPath = shell.resolveProgram(_sCommand)\
+  if sPath ~= nil then\
+    tProgramStack[#tProgramStack + 1] = sPath\
+    if multishell then\
+      local sTitle = fs.getName(sPath)\
+      if sTitle:sub(-4) == \".lua\" then\
+        sTitle = sTitle:sub(1,-5)\
+      end\
+      multishell.setTitle(multishell.getCurrent(), sTitle)\
+    end\
+    local sDir = fs.getDir(sPath)\
+    local tEnv = setmetatable(createShellEnv(sDir), { __index = _G })\
+\
+    local ok\
+    local fnFile, err = loadfile(sPath, tEnv)\
+    if fnFile then\
+      if settings.get(\"mbs.shell.traceback\", true) then\
+        local tArgs = table.pack(...)\
+        ok, err = stack_trace.xpcall_with(function() return fnFile(table.unpack(tArgs, 1, tArgs.n)) end)\
+      else\
+        ok, err = pcall(fnFile, ...)\
+      end\
+\
+      if not ok then\
+        ok = false\
+        if err and err ~= \"\" then printError(err) end\
+      end\
+    else\
+      ok = false\
+      if err and err ~= \"\" then printError(err) end\
+    end\
+\
+    tProgramStack[#tProgramStack] = nil\
+    if multishell then\
+      if #tProgramStack > 0 then\
+        local sTitle = fs.getName(tProgramStack[#tProgramStack])\
+        if sTitle:sub(-4) == \".lua\" then\
+          sTitle = sTitle:sub(1,-5)\
+        end\
+        multishell.setTitle(multishell.getCurrent(), sTitle)\
+      else\
+        multishell.setTitle(multishell.getCurrent(), \"shell\")\
+      end\
+    end\
+    return ok\
+  else\
+    printError(\"No such program\")\
+    return false\
+  end\
+end\
+\
+local function tokenise(...)\
+  local sLine = table.concat({ ... }, \" \")\
+  local tWords = {}\
+  local bQuoted = false\
+  for match in string.gmatch(sLine .. \"\\\"\", \"(.-)\\\"\") do\
+    if bQuoted then\
+      table.insert(tWords, match)\
+    else\
+      for m in string.gmatch(match, \"[^ \\t]+\") do\
+        table.insert(tWords, m)\
+      end\
+    end\
+    bQuoted = not bQuoted\
+  end\
+  return tWords\
+end\
+\
+-- Install shell API\
+function shell.run(...)\
+  local tWords = tokenise(...)\
+  local sCommand = tWords[1]\
+  if sCommand then\
+    return run(sCommand, table.unpack(tWords, 2))\
+  end\
+  return false\
+end\
+\
+function shell.exit()\
+  bExit = true\
+end\
+\
+function shell.dir()\
+  return sDir\
+end\
+\
+function shell.setDir(_sDir)\
+  if type(_sDir) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sDir) .. \")\", 2)\
+  end\
+  if not fs.isDir(_sDir) then\
+    error(\"Not a directory\", 2)\
+  end\
+  sDir = _sDir\
+end\
+\
+function shell.path()\
+  return sPath\
+end\
+\
+function shell.setPath(_sPath)\
+  if type(_sPath) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sPath) .. \")\", 2)\
+  end\
+  sPath = _sPath\
+end\
+\
+function shell.resolve(_sPath)\
+  if type(_sPath) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sPath) .. \")\", 2)\
+  end\
+  local sStartChar = string.sub(_sPath, 1, 1)\
+  if sStartChar == \"/\" or sStartChar == \"\\\\\" then\
+    return fs.combine(\"\", _sPath)\
+  else\
+    return fs.combine(sDir, _sPath)\
+  end\
+end\
+\
+local function pathWithExtension(_sPath, _sExt)\
+  local nLen = #sPath\
+  local sEndChar = string.sub(_sPath, nLen, nLen)\
+  -- Remove any trailing slashes so we can add an extension to the path safely\
+  if sEndChar == \"/\" or sEndChar == \"\\\\\" then\
+    _sPath = string.sub(_sPath, 1, nLen - 1)\
+  end\
+  return _sPath .. \".\" .. _sExt\
+end\
+\
+function shell.resolveProgram(_sCommand)\
+  if type(_sCommand) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sCommand) .. \")\", 2)\
+  end\
+  -- Substitute aliases firsts\
+  if tAliases[_sCommand] ~= nil then\
+    _sCommand = tAliases[_sCommand]\
+  end\
+\
+  -- If the path is a global path, use it directly\
+  local sStartChar = string.sub(_sCommand, 1, 1)\
+  if _sCommand:find(\"/\") or _sCommand:find(\"\\\\\") then\
+    local sPath = shell.resolve(_sCommand)\
+    if fs.exists(sPath) and not fs.isDir(sPath) then\
+      return sPath\
+    else\
+      local sPathLua = pathWithExtension(sPath, \"lua\")\
+      if fs.exists(sPathLua) and not fs.isDir(sPathLua) then\
+        return sPathLua\
+      end\
+    end\
+    return nil\
+  end\
+\
+  -- Otherwise, look on the path variable\
+  for sPath in string.gmatch(sPath, \"[^:]+\") do\
+    sPath = fs.combine(shell.resolve(sPath), _sCommand)\
+    if fs.exists(sPath) and not fs.isDir(sPath) then\
+      return sPath\
+    else\
+      local sPathLua = pathWithExtension(sPath, \"lua\")\
+      if fs.exists(sPathLua) and not fs.isDir(sPathLua) then\
+        return sPathLua\
+      end\
+    end\
+  end\
+\
+  -- Not found\
+  return nil\
+end\
+\
+function shell.programs(_bIncludeHidden)\
+  local tItems = {}\
+\
+  -- Add programs from the path\
+  for sPath in string.gmatch(sPath, \"[^:]+\") do\
+    sPath = shell.resolve(sPath)\
+    if fs.isDir(sPath) then\
+      local tList = fs.list(sPath)\
+      for n=1,#tList do\
+        local sFile = tList[n]\
+        if not fs.isDir(fs.combine(sPath, sFile)) and\
+        (_bIncludeHidden or string.sub(sFile, 1, 1) ~= \".\") then\
+          if #sFile > 4 and sFile:sub(-4) == \".lua\" then\
+            sFile = sFile:sub(1,-5)\
+          end\
+          tItems[sFile] = true\
+        end\
+      end\
+    end\
+  end\
+\
+  -- Sort and return\
+  local tItemList = {}\
+  for sItem in pairs(tItems) do\
+    table.insert(tItemList, sItem)\
+  end\
+  table.sort(tItemList)\
+  return tItemList\
+end\
+\
+local function completeProgram(sLine)\
+  if #sLine > 0 and (sLine:find(\"/\") or sLine:find(\"\\\\\")) then\
+    -- Add programs from the root\
+    return fs.complete(sLine, sDir, true, false)\
+\
+  else\
+    local tResults = {}\
+    local tSeen = {}\
+\
+    -- Add aliases\
+    for sAlias in pairs(tAliases) do\
+      if #sAlias > #sLine and string.sub(sAlias, 1, #sLine) == sLine then\
+        local sResult = string.sub(sAlias, #sLine + 1)\
+        if not tSeen[sResult] then\
+          table.insert(tResults, sResult)\
+          tSeen[sResult] = true\
+        end\
+      end\
+    end\
+\
+    -- Add all subdirectories. We don't include files as they will be added in the block below\
+    local tDirs = fs.complete(sLine, sDir, false, false)\
+    for i = 1, #tDirs do\
+      local sResult = tDirs[i]\
+      if not tSeen[sResult] then\
+        table.insert(tResults, sResult)\
+        tSeen[sResult] = true\
+      end\
+    end\
+\
+    -- Add programs from the path\
+    local tPrograms = shell.programs()\
+    for n=1,#tPrograms do\
+      local sProgram = tPrograms[n]\
+      if #sProgram > #sLine and string.sub(sProgram, 1, #sLine) == sLine then\
+        local sResult = string.sub(sProgram, #sLine + 1)\
+        if not tSeen[sResult] then\
+          table.insert(tResults, sResult)\
+          tSeen[sResult] = true\
+        end\
+      end\
+    end\
+\
+    -- Sort and return\
+    table.sort(tResults)\
+    return tResults\
+  end\
+end\
+\
+local function completeProgramArgument(sProgram, nArgument, sPart, tPreviousParts)\
+  local tInfo = tCompletionInfo[sProgram]\
+  if tInfo then\
+    return tInfo.fnComplete(shell, nArgument, sPart, tPreviousParts)\
+  end\
+  return nil\
+end\
+\
+function shell.complete(sLine)\
+  if type(sLine) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(sLine) .. \")\", 2)\
+  end\
+  if #sLine > 0 then\
+    local tWords = tokenise(sLine)\
+    local nIndex = #tWords\
+    if string.sub(sLine, #sLine, #sLine) == \" \" then\
+      nIndex = nIndex + 1\
+    end\
+    if nIndex == 1 then\
+      local sBit = tWords[1] or \"\"\
+      local sPath = shell.resolveProgram(sBit)\
+      if tCompletionInfo[sPath] then\
+        return { \" \" }\
+      else\
+        local tResults = completeProgram(sBit)\
+        for n=1,#tResults do\
+          local sResult = tResults[n]\
+          local sPath = shell.resolveProgram(sBit .. sResult)\
+          if tCompletionInfo[sPath] then\
+            tResults[n] = sResult .. \" \"\
+          end\
+        end\
+        return tResults\
+      end\
+\
+    elseif nIndex > 1 then\
+      local sPath = shell.resolveProgram(tWords[1])\
+      local sPart = tWords[nIndex] or \"\"\
+      local tPreviousParts = tWords\
+      tPreviousParts[nIndex] = nil\
+      return completeProgramArgument(sPath , nIndex - 1, sPart, tPreviousParts)\
+\
+    end\
+  end\
+  return nil\
+end\
+\
+function shell.completeProgram(sProgram)\
+  if type(sProgram) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(sProgram) .. \")\", 2)\
+  end\
+  return completeProgram(sProgram)\
+end\
+\
+function shell.setCompletionFunction(sProgram, fnComplete)\
+  if type(sProgram) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(sProgram) .. \")\", 2)\
+  end\
+  if type(fnComplete) ~= \"function\" then\
+    error(\"bad argument #2 (expected function, got \" .. type(fnComplete) .. \")\", 2)\
+  end\
+  tCompletionInfo[sProgram] = {\
+    fnComplete = fnComplete\
+  }\
+end\
+\
+function shell.getCompletionInfo()\
+  return tCompletionInfo\
+end\
+\
+function shell.getRunningProgram()\
+  if #tProgramStack > 0 then\
+    return tProgramStack[#tProgramStack]\
+  end\
+  return nil\
+end\
+\
+function shell.setAlias(_sCommand, _sProgram)\
+  if type(_sCommand) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sCommand) .. \")\", 2)\
+  end\
+  if type(_sProgram) ~= \"string\" then\
+    error(\"bad argument #2 (expected string, got \" .. type(_sProgram) .. \")\", 2)\
+  end\
+  tAliases[_sCommand] = _sProgram\
+end\
+\
+function shell.clearAlias(_sCommand)\
+  if type(_sCommand) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sCommand) .. \")\", 2)\
+  end\
+  tAliases[_sCommand] = nil\
+end\
+\
+function shell.aliases()\
+  -- Copy aliases\
+  local tCopy = {}\
+  for sAlias, sCommand in pairs(tAliases) do\
+    tCopy[sAlias] = sCommand\
+  end\
+  return tCopy\
+end\
+\
+function shell.history()\
+  -- Read commands and execute them\
+  if not history then\
+    history = {}\
+\
+    local history_file = settings.get(\"mbs.shell.history_file\", \".shell_history\")\
+    if history_file and fs.exists(history_file) then\
+      local handle = fs.open(history_file, \"r\")\
+      if handle then\
+        for line in handle.readLine do history[#history + 1] = line end\
+        handle.close()\
+      end\
+    end\
+  end\
+\
+  return history\
+end\
+\
+if multishell then\
+  function shell.openTab(...)\
+    local tWords = tokenise(...)\
+    local sCommand = tWords[1]\
+    if sCommand then\
+      local sPath = shell.resolveProgram(sCommand)\
+      if sPath == \"rom/programs/shell.lua\" then\
+        return multishell.launch(createShellEnv(\"rom/programs\"), sPath, table.unpack(tWords, 2))\
+      elseif sPath ~= nil then\
+        return multishell.launch(createShellEnv(\"rom/programs\"), \"rom/programs/shell.lua\", sCommand, table.unpack(tWords, 2))\
+      else\
+        printError(\"No such program\")\
+      end\
+    end\
+  end\
+\
+  function shell.switchTab(nID)\
+    if type(nID) ~= \"number\" then\
+      error(\"bad argument #1 (expected number, got \" .. type(nID) .. \")\", 2)\
+    end\
+    multishell.setFocus(nID)\
+  end\
+end\
+\
+local tArgs = { ... }\
+if #tArgs > 0 then\
+  -- \"shell x y z\"\
+  -- Run the program specified on the commandline\
+  shell.run(...)\
+\
+else\
+  -- \"shell\"\
+  -- Print the header\
+  local parent = term.current()\
+  local redirect = scroll_window.create(parent)\
+\
+  term.redirect(redirect)\
+  term.setCursorPos(1, 1)\
+  term.setBackgroundColor(bgColour)\
+  term.setTextColour(promptColour)\
+  print(os.version() .. \" (+MBS)\")\
+  term.setTextColour(textColour)\
+\
+  fCustomRead = function(...)\
+    local offset = 0\
+    local line = nil\
+    local args = table.pack(...)\
+    parallel.waitForAny(\
+      function() line = read(table.unpack(args, 1, args.n)) end,\
+      function()\
+        while true do\
+          local change = 0\
+          local e, event_arg = os.pullEventRaw()\
+          if e == \"mouse_scroll\" then\
+            change = event_arg\
+          elseif e == \"key\" and event_arg == keys.pageDown then\
+            change = 10\
+          elseif e == \"key\" and event_arg == keys.pageUp then\
+            change = -10\
+          elseif e == \"key\" or e == \"paste\" then\
+            -- Reset offset if another key is pressed\
+            change = -offset\
+          elseif e == \"term_resize\" then\
+            redirect.updateSize()\
+            redirect.draw(offset, true)\
+          end\
+\
+          if change ~= 0 and term.current() == redirect and not redirect.isPrivateMode() then\
+            offset = offset + change\
+            if offset > 0 then offset = 0 end\
+            if offset < -redirect.getTotalHeight() then offset = -redirect.getTotalHeight() end\
+            redirect.draw(offset)\
+          end\
+        end\
+      end\
+    )\
+\
+    if offset ~= 0 then redirect.draw(0) end\
+    return line\
+  end\
+\
+  -- Run the startup program\
+  if parentShell == nil then\
+    shell.run(\"/rom/startup.lua\")\
+  end\
+\
+  local history = shell.history()\
+  while not bExit do\
+    local scrollback = tonumber(settings.get(\"mbs.shell.scroll_max\", 1e3))\
+    if scrollback then redirect.setMaxScrollback(scrollback) end\
+\
+    term.setBackgroundColor(bgColour)\
+    term.setTextColour(promptColour)\
+    if term.getCursorPos() ~= 1 then print() end\
+    write(shell.dir() .. \"> \")\
+    term.setTextColour(textColour)\
+\
+    local line\
+    if settings.get(\"shell.autocomplete\") then\
+      line = fCustomRead(nil, history, shell.complete)\
+    else\
+      line = fCustomRead(nil, history)\
+    end\
+\
+    if not line then break end\
+\
+    if line:match(\"%S\") and history[#history] ~= line then\
+      -- Add item to history\
+      history[#history + 1] = line\
+\
+      -- Remove extra items from history\
+      local max = tonumber(settings.get(\"mbs.shell.history_max\", 1e4)) or 1e4\
+      while #history > max do table.remove(history, 1) end\
+\
+      -- Write history file\
+      local history_file = settings.get(\"mbs.shell.history_file\", \".shell_history\")\
+      if history_file then\
+        local handle = fs.open(history_file, \"w\")\
+        if handle then\
+          for i = 1, #history do handle.writeLine(history[i]) end\
+          handle.close()\
+        end\
+      end\
+    end\
+\
+    local _, y = term.getCursorPos()\
+    redirect.setCursorThreshold(y)\
+\
+    local ok = shell.run(line)\
+\
+    term.redirect(redirect)\
+    redirect.endPrivateMode(not ok)\
+    redirect.draw(0)\
+  end\
+\
+  term.redirect(parent)\
+end",
+  },
+  {
+    ".mbs/lib/blit_window.lua",
+    "local colour_lookup = {}\
+for i = 0, 16 do\
+  colour_lookup[2 ^ i] = string.format(\"%x\", i)\
+end\
+\
+function create(original)\
+  if not original then original = term.current() end\
+\
+  local text = {}\
+  local text_colour = {}\
+  local back_colour = {}\
+  local palette = {}\
+\
+  local cursor_x, cursor_y = 1, 1\
+\
+  local cursor_blink = false\
+  local cur_text_colour = \"0\"\
+  local cur_back_colour = \"f\"\
+\
+  local sizeX, sizeY = original.getSize()\
+  local color = original.isColor()\
+\
+  local bubble = true\
+\
+  local redirect = {}\
+\
+  if original.getPaletteColour then\
+    for i = 0, 15 do\
+      local c = 2 ^ i\
+      palette[c] = { original.getPaletteColour(c) }\
+    end\
+  end\
+\
+  function redirect.write(writeText)\
+    writeText = tostring(writeText)\
+    if bubble then original.write(writeText) end\
+\
+    local pos = cursor_x\
+\
+    -- If we're off the screen then just emulate a write\
+    if cursor_y > sizeY or cursor_y < 1 then\
+      cursor_x = pos + #writeText\
+      return\
+    end\
+\
+    if pos + #writeText <= 1 or pos > sizeX then\
+      -- If we're too far off the left then skip.\
+      cursor_x = pos + #writeText\
+      return\
+    elseif pos < 1 then\
+      -- Adjust text to fit on screen starting at one.\
+      writeText = string.sub(writeText, math.abs(cursor_x) + 2)\
+      pos = 1\
+    end\
+\
+    local lineText = text[cursor_y]\
+    local lineColor = text_colour[cursor_y]\
+    local lineBack = back_colour[cursor_y]\
+    local preStop = pos - 1\
+    local preStart = math.min(1, preStop)\
+    local postStart = pos + string.len(writeText)\
+    local postStop = sizeX\
+    local sub, rep = string.sub, string.rep\
+\
+    text[cursor_y] = sub(lineText, preStart, preStop)..writeText..sub(lineText, postStart, postStop)\
+    text_colour[cursor_y] = sub(lineColor, preStart, preStop)..rep(cur_text_colour, #writeText)..sub(lineColor, postStart, postStop)\
+    back_colour[cursor_y] = sub(lineBack, preStart, preStop)..rep(cur_back_colour, #writeText)..sub(lineBack, postStart, postStop)\
+    cursor_x = pos + string.len(writeText)\
+  end\
+\
+  function redirect.blit(writeText, writeFore, writeBack)\
+    if type(writeText) ~= \"string\" then error(\"bad argument #1 (expected string, got \" .. type(writeText) .. \")\", 2) end\
+    if type(writeFore) ~= \"string\" then error(\"bad argument #2 (expected string, got \" .. type(writeFore) .. \")\", 2) end\
+    if type(writeBack) ~= \"string\" then error(\"bad argument #3 (expected string, got \" .. type(writeBack) .. \")\", 2) end\
+    if #writeFore ~= #writeText or #writeBack ~= #writeText then error(\"Arguments must be the same length\", 2) end\
+\
+    if bubble then original.blit(writeText, writeFore, writeBack) end\
+    local pos = cursor_x\
+\
+    -- If we're off the screen then just emulate a write\
+    if cursor_y > sizeY or cursor_y < 1 then\
+      cursor_x = pos + #writeText\
+      return\
+    end\
+\
+    if pos + #writeText <= 1 then\
+      --skip entirely.\
+      cursor_x = pos + #writeText\
+      return\
+    elseif pos < 1 then\
+      --adjust text to fit on screen starting at one.\
+      writeText = string.sub(writeText, math.abs(cursor_x) + 2)\
+      writeFore = string.sub(writeFore, math.abs(cursor_x) + 2)\
+      writeBack = string.sub(writeBack, math.abs(cursor_x) + 2)\
+      cursor_x = 1\
+    elseif pos > sizeX then\
+      --if we're off the edge to the right, skip entirely.\
+      cursor_x = pos + #writeText\
+      return\
+    end\
+\
+    local lineText = text[cursor_y]\
+    local lineColor = text_colour[cursor_y]\
+    local lineBack = back_colour[cursor_y]\
+    local preStop = cursor_x - 1\
+    local preStart = math.min(1, preStop)\
+    local postStart = cursor_x + string.len(writeText)\
+    local postStop = sizeX\
+    local sub = string.sub\
+\
+    text[cursor_y] = sub(lineText, preStart, preStop)..writeText..sub(lineText, postStart, postStop)\
+    text_colour[cursor_y] = sub(lineColor, preStart, preStop)..writeFore..sub(lineColor, postStart, postStop)\
+    back_colour[cursor_y] = sub(lineBack, preStart, preStop)..writeBack..sub(lineBack, postStart, postStop)\
+    cursor_x = pos + string.len(writeText)\
+  end\
+\
+  function redirect.clear()\
+    for i = 1, sizeY do\
+      text[i] = string.rep(\" \", sizeX)\
+      text_colour[i] = string.rep(cur_text_colour, sizeX)\
+      back_colour[i] = string.rep(cur_back_colour, sizeX)\
+    end\
+\
+    if bubble then return original.clear() end\
+  end\
+\
+  function redirect.clearLine()\
+    -- If we're off the screen then just emulate a clearLine\
+    if cursor_y > sizeY or cursor_y < 1 then\
+      return\
+    end\
+\
+    text[cursor_y] = string.rep(\" \", sizeX)\
+    text_colour[cursor_y] = string.rep(cur_text_colour, sizeX)\
+    back_colour[cursor_y] = string.rep(cur_back_colour, sizeX)\
+\
+    if bubble then return original.clearLine() end\
+  end\
+\
+  function redirect.getCursorPos()\
+    return cursor_x, cursor_y\
+  end\
+\
+  function redirect.setCursorPos(x, y)\
+    if type(x) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(x) .. \")\", 2) end\
+    if type(y) ~= \"number\" then error(\"bad argument #2 (expected number, got \" .. type(y) .. \")\", 2) end\
+\
+    cursor_x = math.floor(x)\
+    cursor_y = math.floor(y)\
+    if bubble then return original.setCursorPos(x, y) end\
+  end\
+\
+  function redirect.setCursorBlink(b)\
+    cursor_blink = b\
+    if bubble then return original.setCursorBlink(b) end\
+  end\
+\
+  function redirect.getSize()\
+    return sizeX, sizeY\
+  end\
+\
+  function redirect.scroll(n)\
+    if type(n) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(n) .. \")\", 2) end\
+\
+    local empty_text = string.rep(\" \", sizeX)\
+    local empty_text_colour = string.rep(cur_text_colour, sizeX)\
+    local empty_back_colour = string.rep(cur_back_colour, sizeX)\
+    if n > 0 then\
+      for i = 1, sizeY do\
+        text[i] = text[i + n] or empty_text\
+        text_colour[i] = text_colour[i + n] or empty_text_colour\
+        back_colour[i] = back_colour[i + n] or empty_back_colour\
+      end\
+    elseif n < 0 then\
+      for i = sizeY, 1, -1 do\
+        text[i] = text[i + n] or empty_text\
+        text_colour[i] = text_colour[i + n] or empty_text_colour\
+        back_colour[i] = back_colour[i + n] or empty_back_colour\
+      end\
+    end\
+\
+    if bubble then return original.scroll(n) end\
+  end\
+\
+  function redirect.setTextColour(clr)\
+    if type(clr) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(clr) .. \")\", 2) end\
+    cur_text_colour = colour_lookup[clr] or error(\"Invalid colour (got \" .. clr .. \")\" , 2)\
+    if bubble then return original.setTextColour(clr) end\
+  end\
+  redirect.setTextColor = redirect.setTextColour\
+\
+  function redirect.setBackgroundColour(clr)\
+    if type(clr) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(clr) .. \")\", 2) end\
+    cur_back_colour = colour_lookup[clr] or error(\"Invalid colour (got \" .. clr .. \")\" , 2)\
+    if bubble then return original.setBackgroundColour(clr) end\
+  end\
+  redirect.setBackgroundColor = redirect.setBackgroundColour\
+\
+  function redirect.isColour()\
+    return color == true\
+  end\
+  redirect.isColor = redirect.isColour\
+\
+  function redirect.getTextColour()\
+    return 2 ^ tonumber(cur_text_colour, 16)\
+  end\
+  redirect.getTextColor = redirect.getTextColour\
+\
+  function redirect.getBackgroundColour()\
+    return 2 ^ tonumber(cur_back_colour, 16)\
+  end\
+  redirect.getBackgroundColor = redirect.getBackgroundColour\
+\
+  if original.getPaletteColour then\
+    function redirect.setPaletteColour(colour, r, g, b)\
+      local palcol = palette[colour]\
+      if not palcol then error(\"Invalid colour (got \" .. tostring(colour) .. \")\", 2) end\
+      if type(r) == \"number\" and g == nil and b == nil then\
+          palcol[1], palcol[2], palcol[3] = colours.rgb8(r)\
+      else\
+          if type(r) ~= \"number\" then error(\"bad argument #2 (expected number, got \" .. type(r) .. \")\", 2) end\
+          if type(g) ~= \"number\" then error(\"bad argument #3 (expected number, got \" .. type(g) .. \")\", 2) end\
+          if type(b) ~= \"number\" then error(\"bad argument #4 (expected number, got \" .. type(b) .. \")\", 2) end\
+\
+          palcol[1], palcol[2], palcol[3] = r, g, b\
+      end\
+\
+      if bubble then return original.setPaletteColour(colour, r, g, b) end\
+    end\
+    redirect.setPaletteColor = redirect.setPaletteColour\
+\
+    function redirect.getPaletteColour(colour)\
+      local palcol = palette[colour]\
+      if not palcol then error(\"Invalid colour (got \" .. tostring(colour) .. \")\", 2) end\
+      return palcol[1], palcol[2], palcol[3]\
+    end\
+    redirect.getPaletteColor = redirect.getPaletteColour\
+  end\
+\
+  function redirect.draw(target)\
+    if not target then target = original end\
+\
+    if target.getPaletteColour then\
+      for colour, pal in pairs(palette) do\
+        target.setPaletteColour(colour, pal[1], pal[2], pal[3])\
+      end\
+    end\
+\
+    for i=1, sizeY do\
+      target.setCursorPos(1,i)\
+      target.blit(text[i], text_colour[i], back_colour[i])\
+    end\
+\
+    target.setCursorPos(cursor_x, cursor_y)\
+    target.setTextColour(2 ^ tonumber(cur_text_colour, 16))\
+    target.setBackgroundColor(2 ^ tonumber(cur_back_colour, 16))\
+    target.setCursorBlink(cursor_blink)\
+  end\
+\
+  function redirect.bubble(b)\
+    bubble = b\
+  end\
+\
+  function redirect.updateSize()\
+    local new_x, new_y = original.getSize()\
+    if new_x == sizeX and new_y == sizeY then return end\
+\
+    -- For any existing lines, trim them\
+    for y = 1, sizeY do\
+      if new_x < sizeX then\
+        text[y] = text[y]:sub(1, new_x)\
+        text_colour[y] = text_colour[y]:sub(1, new_x)\
+        back_colour[y] = back_colour[y]:sub(1, new_x)\
+      elseif new_x > sizeX then\
+        text[y] = text[y] .. (\" \"):rep(new_x - sizeX)\
+        text_colour[y] = text_colour[y] .. (cur_text_colour):rep(new_x - sizeX)\
+        back_colour[y] = back_colour[y] .. (cur_back_colour):rep(new_x - sizeX)\
+      end\
+    end\
+\
+    -- Add any new lines we might need.\
+    local text_line = (\" \"):rep(new_x)\
+    local fore_line = (cur_text_colour):rep(new_x)\
+    local back_line = (cur_back_colour):rep(new_x)\
+    for y = sizeY + 1, new_y do\
+      text[y] = text_line\
+      text_colour[y] = fore_line\
+      back_colour[y] = back_line\
+    end\
+\
+    sizeX = new_x\
+    sizeY = new_y\
+  end\
+\
+  redirect.clear()\
+  return redirect\
+end",
+  },
+  {
+    ".mbs/lib/scroll_window.lua",
+    "local type = type\
+\
+local colour_lookup = {}\
+for i = 0, 16 do\
+  colour_lookup[2 ^ i] = string.format(\"%x\", i)\
+end\
+\
+function create(original)\
+  if not original then original = term.current() end\
+\
+  local text = {}\
+  local text_colour = {}\
+  local back_colour = {}\
+  local palette = {}\
+\
+  local cursor_x, cursor_y = 1, 1\
+\
+  local scroll_offset = 0\
+  local scroll_cursor_y = cursor_y\
+\
+  local cursor_blink = false\
+  local cur_text_colour = \"0\"\
+  local cur_back_colour = \"f\"\
+\
+  local sizeX, sizeY = original.getSize()\
+  local color = original.isColor()\
+\
+  local max_scrollback = 100\
+  local bubble, delegate = true, nil\
+\
+  local cursor_threshold = 0\
+\
+  local redirect = {}\
+\
+  if original.getPaletteColour then\
+    for i = 0, 15 do\
+      local c = 2 ^ i\
+      palette[c] = { original.getPaletteColour(c) }\
+    end\
+  end\
+\
+  local function trim()\
+    if max_scrollback > -1 then\
+      while scroll_offset > max_scrollback do\
+        table.remove(text, 1)\
+        table.remove(text_colour, 1)\
+        table.remove(back_colour, 1)\
+        scroll_offset = scroll_offset - 1\
+      end\
+    end\
+    scroll_cursor_y = scroll_offset + cursor_y\
+  end\
+\
+  function redirect.write(writeText)\
+    if delegate then return delegate.write(writeText) end\
+\
+    writeText = tostring(writeText)\
+    if bubble then original.write(writeText) end\
+\
+    local pos = cursor_x\
+\
+    -- If we're off the screen then just emulate a write\
+    if cursor_y > sizeY or cursor_y < 1 then\
+      cursor_x = pos + #writeText\
+      return\
+    end\
+\
+    if pos + #writeText <= 1 or pos > sizeX then\
+      -- If we're too far off the left then skip.\
+      cursor_x = pos + #writeText\
+      return\
+    elseif pos < 1 then\
+      -- Adjust text to fit on screen starting at one.\
+      writeText = string.sub(writeText, -pos + 2)\
+      pos = 1\
+    end\
+\
+    local lineText = text[scroll_cursor_y]\
+    local lineColor = text_colour[scroll_cursor_y]\
+    local lineBack = back_colour[scroll_cursor_y]\
+    local preStop = pos - 1\
+    local preStart = math.min(1, preStop)\
+    local postStart = pos + string.len(writeText)\
+    local postStop = sizeX\
+    local sub, rep = string.sub, string.rep\
+\
+    text[scroll_cursor_y] = sub(lineText, preStart, preStop)..writeText..sub(lineText, postStart, postStop)\
+    text_colour[scroll_cursor_y] = sub(lineColor, preStart, preStop)..rep(cur_text_colour, #writeText)..sub(lineColor, postStart, postStop)\
+    back_colour[scroll_cursor_y] = sub(lineBack, preStart, preStop)..rep(cur_back_colour, #writeText)..sub(lineBack, postStart, postStop)\
+    cursor_x = pos + string.len(writeText)\
+  end\
+\
+  function redirect.blit(writeText, writeFore, writeBack)\
+    if delegate then return delegate.blit(writeText, writeFore, writeBack) end\
+\
+    if type(writeText) ~= \"string\" then error(\"bad argument #1 (expected string, got \" .. type(writeText) .. \")\", 2) end\
+    if type(writeFore) ~= \"string\" then error(\"bad argument #2 (expected string, got \" .. type(writeFore) .. \")\", 2) end\
+    if type(writeBack) ~= \"string\" then error(\"bad argument #3 (expected string, got \" .. type(writeBack) .. \")\", 2) end\
+    if #writeFore ~= #writeText or #writeBack ~= #writeText then error(\"Arguments must be the same length\", 2) end\
+\
+    if bubble then original.blit(writeText, writeFore, writeBack) end\
+\
+    local pos = cursor_x\
+\
+    -- If we're off the screen then just emulate a write\
+    if cursor_y > sizeY or cursor_y < 1 then\
+      cursor_x = pos + #writeText\
+      return\
+    end\
+\
+    if pos + #writeText <= 1 then\
+      --skip entirely.\
+      cursor_x = pos + #writeText\
+      return\
+    elseif pos < 1 then\
+      --adjust text to fit on screen starting at one.\
+      writeText = string.sub(writeText, math.abs(cursor_x) + 2)\
+      writeFore = string.sub(writeFore, math.abs(cursor_x) + 2)\
+      writeBack = string.sub(writeBack, math.abs(cursor_x) + 2)\
+      cursor_x = 1\
+    elseif pos > sizeX then\
+      --if we're off the edge to the right, skip entirely.\
+      cursor_x = pos + #writeText\
+      return\
+    else\
+      writeText = writeText\
+    end\
+\
+    local lineText = text[scroll_cursor_y]\
+    local lineColor = text_colour[scroll_cursor_y]\
+    local lineBack = back_colour[scroll_cursor_y]\
+    local preStop = cursor_x - 1\
+    local preStart = math.min(1, preStop)\
+    local postStart = cursor_x + string.len(writeText)\
+    local postStop = sizeX\
+    local sub = string.sub\
+\
+    text[scroll_cursor_y] = sub(lineText, preStart, preStop)..writeText..sub(lineText, postStart, postStop)\
+    text_colour[scroll_cursor_y] = sub(lineColor, preStart, preStop)..writeFore..sub(lineColor, postStart, postStop)\
+    back_colour[scroll_cursor_y] = sub(lineBack, preStart, preStop)..writeBack..sub(lineBack, postStart, postStop)\
+    cursor_x = pos + #writeText\
+  end\
+\
+  function redirect.clear()\
+    if delegate then return delegate.clear() end\
+\
+    if cursor_threshold > 0 then\
+      return redirect.beginPrivateMode().clear()\
+    end\
+\
+    local text_line = (\" \"):rep(sizeX)\
+    local fore_line = (cur_text_colour):rep(sizeX)\
+    local back_line = (cur_back_colour):rep(sizeX)\
+\
+    for i = scroll_offset + 1, sizeY + scroll_offset do\
+      text[i] = text_line\
+      text_colour[i] = fore_line\
+      back_colour[i] = back_line\
+    end\
+\
+    if bubble then return original.clear() end\
+  end\
+  function redirect.clearLine()\
+    if delegate then return delegate.clearLine() end\
+\
+    -- If we're off the screen then just emulate a clearLine\
+    if cursor_y > sizeY or cursor_y < 1 then\
+      return\
+    end\
+\
+    text[scroll_cursor_y] = string.rep(\" \", sizeX)\
+    text_colour[scroll_cursor_y] = string.rep(cur_text_colour, sizeX)\
+    back_colour[scroll_cursor_y] = string.rep(cur_back_colour, sizeX)\
+\
+    if bubble then return original.clearLine() end\
+  end\
+\
+  function redirect.getCursorPos()\
+    if delegate then return delegate.getCursorPos() end\
+    return cursor_x, cursor_y\
+  end\
+\
+  function redirect.setCursorPos(x, y)\
+    if delegate then return delegate.setCursorPos(x, y) end\
+\
+    if type(x) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(x) .. \")\", 2) end\
+    if type(y) ~= \"number\" then error(\"bad argument #2 (expected number, got \" .. type(y) .. \")\", 2) end\
+\
+    local new_y = math.floor(y)\
+    if new_y >= 1 and new_y < cursor_threshold then\
+      -- If we're writing within a protected region then start a private buffer\
+      return redirect.beginPrivateMode().setCursorPos(x, y)\
+    end\
+\
+    cursor_x = math.floor(x)\
+    cursor_y = new_y\
+    scroll_cursor_y = new_y + scroll_offset\
+\
+    if bubble then return original.setCursorPos(x, y) end\
+  end\
+\
+  function redirect.setCursorBlink(b)\
+    if delegate then return delegate.setCursorBlink(b) end\
+\
+    if type(b) ~= \"boolean\" then error(\"bad argument #1 (expected boolean, got \" .. type(b) .. \")\", 2) end\
+\
+    cursor_blink = b\
+    if bubble then return original.setCursorBlink(b) end\
+  end\
+\
+  function redirect.getSize()\
+    if delegate then return delegate.getSize() end\
+\
+    return sizeX, sizeY\
+  end\
+\
+  function redirect.scroll(n)\
+    if delegate then return delegate.scroll(n) end\
+\
+    if type(n) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(n) .. \")\", 2) end\
+\
+    if n > 0 then\
+      scroll_offset = scroll_offset + n\
+      for i = sizeY + scroll_offset - n + 1, sizeY + scroll_offset do\
+        text[i] = string.rep(\" \", sizeX)\
+        text_colour[i] = string.rep(cur_text_colour, sizeX)\
+        back_colour[i] = string.rep(cur_back_colour, sizeX)\
+      end\
+\
+      trim()\
+    elseif n < 0 then\
+      for i = sizeY + scroll_cursor_y, math.abs(n) + 1 + scroll_cursor_y, -1 do\
+        if text[i + n] then\
+          text[i] = text[i + n]\
+          text_colour[i] = text_colour[i + n]\
+          back_colour[i] = back_colour[i + n]\
+        end\
+      end\
+\
+      for i = scroll_cursor_y, math.abs(n) + scroll_cursor_y do\
+        text[i] = string.rep(\" \", sizeX)\
+        text_colour[i] = string.rep(cur_text_colour, sizeX)\
+        back_colour[i] = string.rep(cur_back_colour, sizeX)\
+      end\
+    end\
+\
+    cursor_threshold = cursor_threshold - n\
+\
+    if bubble then return original.scroll(n) end\
+  end\
+\
+  function redirect.setTextColour(clr)\
+    if delegate then return delegate.setTextColour(clr) end\
+\
+    if type(clr) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(clr) .. \")\", 2) end\
+    cur_text_colour = colour_lookup[clr] or error(\"Invalid colour (got \" .. clr .. \")\" , 2)\
+    if bubble then return original.setTextColour(clr) end\
+  end\
+  redirect.setTextColor = redirect.setTextColour\
+\
+  function redirect.setBackgroundColour(clr)\
+    if delegate then return delegate.setBackgroundColour(clr) end\
+\
+    if type(clr) ~= \"number\" then error(\"bad argument #1 (expected number, got \" .. type(clr) .. \")\", 2) end\
+    cur_back_colour = colour_lookup[clr] or error(\"Invalid colour (got \" .. clr .. \")\" , 2)\
+    if bubble then return original.setBackgroundColour(clr) end\
+  end\
+  redirect.setBackgroundColor = redirect.setBackgroundColour\
+\
+  function redirect.isColour()\
+    if delegate then return delegate.isColour() end\
+    return color == true\
+  end\
+  redirect.isColor = redirect.isColour\
+\
+  function redirect.getTextColour()\
+    if delegate then return delegate.getTextColour() end\
+    return 2 ^ tonumber(cur_text_colour, 16)\
+  end\
+  redirect.getTextColor = redirect.getTextColour\
+\
+  function redirect.getBackgroundColour()\
+    if delegate then return delegate.getBackgroundColour() end\
+    return 2 ^ tonumber(cur_back_colour, 16)\
+  end\
+  redirect.getBackgroundColor = redirect.getBackgroundColour\
+\
+  if original.getPaletteColour then\
+    function redirect.setPaletteColour(colour, r, g, b)\
+      if delegate then return delegate.setPaletteColour(colour, r, g, b) end\
+\
+      local palcol = palette[colour]\
+      if not palcol then error(\"Invalid colour (got \" .. tostring(colour) .. \")\", 2) end\
+      if type(r) == \"number\" and g == nil and b == nil then\
+          palcol[1], palcol[2], palcol[3] = colours.rgb8(r)\
+      else\
+          if type(r) ~= \"number\" then error(\"bad argument #2 (expected number, got \" .. type(r) .. \")\", 2) end\
+          if type(g) ~= \"number\" then error(\"bad argument #3 (expected number, got \" .. type(g) .. \")\", 2) end\
+          if type(b) ~= \"number\" then error(\"bad argument #4 (expected number, got \" .. type(b) .. \")\", 2) end\
+\
+          palcol[1], palcol[2], palcol[3] = r, g, b\
+      end\
+\
+      if bubble then return original.setPaletteColour(colour, r, g, b) end\
+    end\
+    redirect.setPaletteColor = redirect.setPaletteColour\
+\
+    function redirect.getPaletteColour(colour)\
+      if delegate then return delegate.getPaletteColour(colour) end\
+\
+      local palcol = palette[colour]\
+      if not palcol then error(\"Invalid colour (got \" .. tostring(colour) .. \")\", 2) end\
+      return palcol[1], palcol[2], palcol[3]\
+    end\
+    redirect.getPaletteColor = redirect.getPaletteColour\
+  end\
+\
+  function redirect.draw(offset, clear)\
+    if delegate then return end\
+\
+    if original.getPaletteColour then\
+      for colour, pal in pairs(palette) do\
+        original.setPaletteColour(colour, pal[1], pal[2], pal[3])\
+      end\
+    end\
+\
+    original.setTextColour(2 ^ tonumber(cur_text_colour, 16))\
+    original.setBackgroundColor(2 ^ tonumber(cur_back_colour, 16))\
+    if clear then original.clear() end\
+\
+    local original = original\
+    local scroll_offset = scroll_offset + (offset or 0)\
+    for i=1, sizeY do\
+      original.setCursorPos(1,i)\
+      local yOffset = scroll_offset + i\
+      original.blit(text[yOffset], text_colour[yOffset], back_colour[yOffset])\
+    end\
+\
+    original.setCursorPos(cursor_x, cursor_y - offset)\
+    original.setCursorBlink(cursor_blink)\
+  end\
+\
+  function redirect.bubble(b)\
+    bubble = b\
+  end\
+\
+  function redirect.setCursorThreshold(y)\
+    cursor_threshold = y\
+  end\
+\
+  function redirect.endPrivateMode(redraw)\
+    if delegate then\
+      local old_delegate = delegate\
+      delegate = nil\
+      redirect.draw(0)\
+\
+      -- If we should redraw the old buffer then blit it to the canvas\
+      if redraw then\
+        if cursor_threshold > 0 then\
+          redirect.scroll(cursor_threshold)\
+        end\
+\
+        old_delegate.draw(redirect)\
+      end\
+    end\
+  end\
+\
+  function redirect.beginPrivateMode()\
+    if not delegate then\
+      delegate = blit_window.create(original)\
+\
+      for y = 1, sizeY do\
+        delegate.setCursorPos(1, y)\
+        delegate.blit(text[y + scroll_offset], text_colour[y + scroll_offset], back_colour[y + scroll_offset])\
+      end\
+\
+      delegate.setCursorPos(cursor_x, cursor_y)\
+      delegate.setCursorBlink(cursor_blink)\
+      delegate.setTextColour(2 ^ tonumber(cur_text_colour, 16))\
+      delegate.setBackgroundColor(2 ^ tonumber(cur_back_colour, 16))\
+\
+      if original.getPaletteColour then\
+        for i = 0, 15 do\
+          local palcol = palette[2 ^ i]\
+          delegate.setPaletteColour(2 ^ i, palcol[1], palcol[2], palcol[3])\
+        end\
+      end\
+    end\
+\
+    return delegate\
+  end\
+\
+  function redirect.isPrivateMode()\
+    return delegate ~= nil\
+  end\
+\
+  function redirect.getTotalHeight() return scroll_offset end\
+\
+  function redirect.setMaxScrollback(n)\
+    local old_scrollback = max_scrollback\
+    max_scrollback = n\
+\
+    if old_scrollback > max_scrollback then trim() end\
+  end\
+\
+  function redirect.updateSize()\
+    -- Update the delegate window.\
+    if delegate then delegate.updateSize() end\
+\
+    -- If nothing has changed then just skip.\
+    local new_x, new_y = original.getSize()\
+    if new_x == sizeX and new_y == sizeY then return end\
+\
+    -- If we have an insufficient number of lines then add some in.\
+    local total_height = #text\
+\
+    -- For any existing lines, trim them\
+    for y = 1, total_height do\
+      if new_x < sizeX then\
+        text[y] = text[y]:sub(1, new_x)\
+        text_colour[y] = text_colour[y]:sub(1, new_x)\
+        back_colour[y] = back_colour[y]:sub(1, new_x)\
+      elseif new_x > sizeX then\
+        text[y] = text[y] .. (\" \"):rep(new_x - sizeX)\
+        text_colour[y] = text_colour[y] .. (cur_text_colour):rep(new_x - sizeX)\
+        back_colour[y] = back_colour[y] .. (cur_back_colour):rep(new_x - sizeX)\
+      end\
+    end\
+\
+    -- Add any new lines we might need.\
+    local text_line = (\" \"):rep(new_x)\
+    local fore_line = (cur_text_colour):rep(new_x)\
+    local back_line = (cur_back_colour):rep(new_x)\
+    for y = total_height + 1, new_y do\
+      text[y] = text_line\
+      text_colour[y] = fore_line\
+      back_colour[y] = back_line\
+    end\
+\
+    sizeX = new_x\
+    sizeY = new_y\
+\
+    -- Update the scroll offset. For now we just go back to the bottom\
+    scroll_offset = #text - sizeY\
+    scroll_cursor_y = scroll_offset + cursor_y\
+    trim()\
+  end\
+\
+  redirect.clear()\
+  return redirect\
+end",
+  },
+  {
+    ".mbs/lib/stack_trace.lua",
+    "local type = type\
+local debug_traceback = type(debug) == \"table\" and type(debug.traceback) == \"function\" and debug.traceback\
+\
+local function traceback(x)\
+  -- Attempt to detect error() and error(\"xyz\", 0).\
+  -- This probably means they're erroring the program intentionally and so we\
+  -- shouldn't display anything.\
+  if x == nil or (type(x) == \"string\" and not x:find(\":%d+:\")) then\
+    return x\
+  end\
+\
+  if debug_traceback then\
+    -- The parens are important, as they prevent a tail call occuring, meaning\
+    -- the stack level is preserved. This ensures the code behaves identically\
+    -- on LuaJ and PUC Lua.\
+    return (debug_traceback(tostring(x), 2))\
+  else\
+    local level = 3\
+    local out = { tostring(x), \"stack traceback:\" }\
+    while true do\
+      local _, msg = pcall(error, \"\", level)\
+      if msg == \"\" then break end\
+\
+      out[#out + 1] = \"  \" .. msg\
+      level = level + 1\
+    end\
+\
+    return table.concat(out, \"\\n\")\
+  end\
+end\
+\
+local function trim_traceback(target, marker)\
+  local ttarget, tmarker = {}, {}\
+  for line in target:gmatch(\"([^\\n]*)\\n?\") do ttarget[#ttarget + 1] = line end\
+  for line in marker:gmatch(\"([^\\n]*)\\n?\") do tmarker[#tmarker + 1] = line end\
+\
+  -- Trim identical suffixes\
+  local t_len, m_len = #ttarget, #tmarker\
+  while t_len >= 3 and ttarget[t_len] == tmarker[m_len] do\
+    table.remove(ttarget, t_len)\
+    t_len, m_len = t_len - 1, m_len - 1\
+  end\
+\
+  -- Trim elements from this file and xpcall invocations\
+  while t_len >= 1 and ttarget[t_len]:find(\"^\\tstack_trace%.lua:%d+:\") or\
+        ttarget[t_len] == \"\\t[C]: in function 'xpcall'\" or ttarget[t_len] == \"  xpcall: \" do\
+    table.remove(ttarget, t_len)\
+    t_len = t_len - 1\
+  end\
+\
+  return ttarget\
+end\
+\
+--- Run a function with\
+local function xpcall_with(fn)\
+  -- So this is rather grim: we need to get the full traceback and current one and remove\
+  -- the common prefix\
+  local trace\
+  local res = table.pack(xpcall(fn, traceback)) if not res[1] then trace = traceback(\"trace.lua:1:\") end\
+  local ok, err = res[1], res[2]\
+\
+  if not ok and err ~= nil then\
+    trace = trim_traceback(err, trace)\
+\
+    -- Find the position where the stack traceback actually starts\
+    local trace_starts\
+    for i = #trace, 1, -1 do\
+      if trace[i] == \"stack traceback:\" then trace_starts = i; break end\
+    end\
+\
+    -- If this traceback is more than 15 elements long, keep the first 9, last 5\
+    -- and put an ellipsis between the rest\
+    local max = 15\
+    if trace_starts and #trace - trace_starts > max then\
+      local keep_starts = trace_starts + 10\
+      for i = #trace - trace_starts - max, 0, -1 do table.remove(trace, keep_starts + i) end\
+      table.insert(trace, keep_starts, \"  ...\")\
+    end\
+\
+    return false, table.concat(trace, \"\\n\")\
+  end\
+\
+  return table.unpack(res, 1, res.n)\
+end\
+\
+_ENV.traceback = traceback\
+_ENV.trim_traceback = trim_traceback\
+_ENV.xpcall_with = xpcall_with",
+  },
+  {
+    ".mbs/modules/lua.lua",
+    "return {\
+  description = \"Replaces the Lua REPL with an advanced version.\",\
+\
+  dependencies = {\
+    \"bin/lua.lua\",\
+    \"lib/stack_trace.lua\"\
+  },\
+\
+  -- When updating the defaults, one should also update bin/lua.lua\
+  settings = {\
+    {\
+      name = \"mbs.lua.enabled\",\
+      description = \"Whether the extended Lua REPL is enabled.\",\
+      default = true,\
+    },\
+    {\
+      name = \"mbs.lua.history_file\",\
+      description = \"The file to save history to. Set to false to disable.\",\
+      default = \".lua_history\",\
+    },\
+    {\
+      name = \"mbs.lua.history_max\",\
+      description = \"The maximum size of the history file\",\
+      default = 1e4,\
+    },\
+    {\
+      name = \"mbs.lua.traceback\",\
+      description = \"Show an error traceback when an input errors\",\
+      default = true,\
+    },\
+    {\
+      name= \"mbs.lua.pretty_height\",\
+      description = \"The height to fit the pretty-printer output to. Set to \"\
+        .. \"false to disable, true to use the terminal height or a number for a constant height.\",\
+      default = true,\
+    },\
+  },\
+\
+  enabled = function() return settings.get(\"mbs.lua.enabled\") end,\
+\
+  setup = function(path)\
+    if not _G[\"stack_trace\"] then\
+      os.loadAPI(fs.combine(path, \"lib/stack_trace.lua\"))\
+      if not _G[\"stack_trace\"] then _G[\"stack_trace\"] = _G[\"stack_trace.lua\"] end\
+    end\
+\
+    shell.setAlias(\"lua\", \"/\" .. fs.combine(path, \"bin/lua.lua\"))\
+  end\
+}",
+  },
+  {
+    ".mbs/modules/pager.lua",
+    "return {\
+  description = \"Replaces the textutils pagers with something akin to less\",\
+\
+  dependencies = {\
+    \"bin/help.lua\"\
+  },\
+\
+  settings = {\
+    {\
+      name = \"mbs.pager.enabled\",\
+      description = \"Whether the alternative pager is enabled.\",\
+      default = true,\
+    },\
+    {\
+      name = \"mbs.pager.mode\",\
+      description = \"The mode for the alternative pager.\",\
+      default = \"default\",\
+    }\
+  },\
+\
+  enabled = function() return settings.get(\"mbs.pager.enabled\") end,\
+\
+  setup = function(path)\
+    shell.setAlias(\"help\", \"/\" .. fs.combine(path, \"bin/help.lua\"))\
+    shell.setCompletionFunction(fs.combine(path, \"bin/help.lua\"), function(shell, index, text, previous)\
+      if index == 1 then return help.completeTopic(text) end\
+    end)\
+\
+    local native_pprint, native_ptabulate = textutils.pagedPrint, textutils.pagedTabulate\
+    textutils.pagedPrint = function(text, free_lines)\
+      local mode = settings.get(\"mbs.pager.mode\")\
+      if mode == \"none\" then\
+        return print(text)\
+      else\
+        return native_pprint(text, free_lines)\
+      end\
+    end\
+\
+    textutils.pagedTabulate = function(...)\
+      local mode = settings.get(\"mbs.pager.mode\")\
+      if mode == \"none\" then\
+        return textutils.tabulate(...)\
+      else\
+        return native_ptabulate(...)\
+      end\
+    end\
+  end\
+}",
+  },
+  {
+    ".mbs/modules/readline.lua",
+    "--- Additional readline\
+\
+local complete_fg = colours.grey\
+local complete_bg = -1\
+\
+local colour_table = {\
+  [\"default\"] = -1,\
+}\
+\
+for k, v in pairs(colours) do\
+  if type(v) == \"number\" then colour_table[k] = v end\
+end\
+\
+for k, v in pairs(colors) do\
+  if type(v) == \"number\" then colour_table[k] = v end\
+end\
+\
+local function clamp(value, min, max)\
+  if value < min then return min end\
+  if value > max then return max end\
+  return value\
+end\
+\
+local function read(_sReplaceChar, _tHistory, _fnComplete, _sDefault)\
+  if _sReplaceChar ~= nil and type(_sReplaceChar) ~= \"string\" then\
+    error(\"bad argument #1 (expected string, got \" .. type(_sReplaceChar) .. \")\", 2)\
+  end\
+  if _tHistory ~= nil and type(_tHistory) ~= \"table\" then\
+    error(\"bad argument #2 (expected table, got \" .. type(_tHistory) .. \")\", 2)\
+  end\
+  if _fnComplete ~= nil and type(_fnComplete) ~= \"function\" then\
+    error(\"bad argument #3 (expected function, got \" .. type(_fnComplete) .. \")\", 2)\
+  end\
+  if _sDefault ~= nil and type(_sDefault) ~= \"string\" then\
+    error(\"bad argument #4 (expected string, got \" .. type(_sDefault) .. \")\", 2)\
+  end\
+  term.setCursorBlink(true)\
+\
+  local w = term.getSize()\
+  local sx = term.getCursorPos()\
+\
+  local sLine = _sDefault or \"\"\
+  local nPos, nScroll = #sLine, 0\
+\
+  local nHistoryPos\
+  local tDown = {}\
+  local nMod = 0\
+  if _sReplaceChar then _sReplaceChar = _sReplaceChar:sub(1, 1) end\
+\
+  local tCompletions\
+  local nCompletion\
+  local function recomplete()\
+    if _fnComplete and nPos == #sLine then\
+      tCompletions = _fnComplete(sLine)\
+      if tCompletions and #tCompletions > 0 then\
+        nCompletion = 1\
+      else\
+        nCompletion = nil\
+      end\
+    else\
+      tCompletions = nil\
+      nCompletion = nil\
+    end\
+  end\
+\
+  local function uncomplete()\
+    tCompletions = nil\
+    nCompletion = nil\
+  end\
+\
+  local function updateModifier()\
+    nMod = 0\
+    if tDown[keys.leftCtrl] or tDown[keys.rightCtrl] then nMod = nMod + 1 end\
+    if tDown[keys.leftAlt] or tDown[keys.rightAlt]   then nMod = nMod + 2 end\
+  end\
+\
+  local function nextWord()\
+    -- Attempt to find the position of the next word\
+    local nOffset = sLine:find(\"%w%W\", nPos + 1)\
+    if nOffset then return nOffset else return #sLine end\
+  end\
+\
+  local function prevWord()\
+    -- Attempt to find the position of the previous word\
+    local nOffset = 1\
+    while nOffset <= #sLine do\
+      local nNext = sLine:find(\"%W%w\", nOffset)\
+      if nNext and nNext < nPos then\
+        nOffset = nNext + 1\
+      else\
+        break\
+      end\
+    end\
+    return nOffset - 1\
+  end\
+\
+  local function redraw(_bClear)\
+    local cursor_pos = nPos - nScroll\
+    if sx + cursor_pos >= w then\
+      -- We've moved beyond the RHS, ensure we're on the edge.\
+      nScroll = sx + nPos - w\
+    elseif cursor_pos < 0 then\
+      -- We've moved beyond the LHS, ensure we're on the edge.\
+      nScroll = nPos\
+    end\
+\
+    local _, cy = term.getCursorPos()\
+    term.setCursorPos(sx, cy)\
+    local sReplace = (_bClear and \" \") or _sReplaceChar\
+    if sReplace then\
+      term.write(string.rep(sReplace, math.max(#sLine - nScroll, 0)))\
+    else\
+      term.write(string.sub(sLine, nScroll + 1))\
+    end\
+\
+    if nCompletion then\
+      local sCompletion = tCompletions[ nCompletion ]\
+      local oldText, oldBg\
+      if not _bClear then\
+        oldText = term.getTextColor()\
+        oldBg = term.getBackgroundColor()\
+        if complete_fg >= 0 then term.setTextColor(complete_fg) end\
+        if complete_bg >= 0 then term.setBackgroundColor(complete_bg) end\
+      end\
+      if sReplace then\
+        term.write(string.rep(sReplace, #sCompletion))\
+      else\
+        term.write(sCompletion)\
+      end\
+      if not _bClear then\
+        term.setTextColor(oldText)\
+        term.setBackgroundColor(oldBg)\
+      end\
+    end\
+\
+    term.setCursorPos(sx + nPos - nScroll, cy)\
+  end\
+\
+  local function clear()\
+    redraw(true)\
+  end\
+\
+  recomplete()\
+  redraw()\
+\
+  local function acceptCompletion()\
+    if nCompletion then\
+      -- Clear\
+      clear()\
+\
+      -- Find the common prefix of all the other suggestions which start with the same letter as the current one\
+      local sCompletion = tCompletions[ nCompletion ]\
+      sLine = sLine .. sCompletion\
+      nPos = #sLine\
+\
+      -- Redraw\
+      recomplete()\
+      redraw()\
+    end\
+  end\
+  while true do\
+    local sEvent, param, param1, param2 = os.pullEvent()\
+    if nMod == 0 and sEvent == \"char\" then\
+      -- Typed key\
+      clear()\
+      sLine = string.sub(sLine, 1, nPos) .. param .. string.sub(sLine, nPos + 1)\
+      nPos = nPos + 1\
+      recomplete()\
+      redraw()\
+    elseif sEvent == \"paste\" then\
+      -- Pasted text\
+      clear()\
+      sLine = string.sub(sLine, 1, nPos) .. param .. string.sub(sLine, nPos + 1)\
+      nPos = nPos + #param\
+      recomplete()\
+      redraw()\
+    elseif sEvent == \"key\" then\
+      if param == keys.leftCtrl or param == keys.rightCtrl or param == keys.leftAlt or param == keys.rightAlt then\
+        tDown[param] = true\
+        updateModifier()\
+      elseif param == keys.enter then\
+        -- Enter\
+        if nCompletion then\
+          clear()\
+          uncomplete()\
+          redraw()\
+        end\
+        break\
+      elseif nMod == 1 and param == keys.d then\
+        -- Enter\
+        if nCompletion then\
+          clear()\
+          uncomplete()\
+          redraw()\
+        end\
+        sLine = nil\
+        nPos = 0\
+        break\
+      elseif (nMod == 0 and param == keys.left) or (nMod == 1 and param == keys.b) then\
+        -- Left\
+        if nPos > 0 then\
+          clear()\
+          nPos = nPos - 1\
+          recomplete()\
+          redraw()\
+        end\
+      elseif (nMod == 0 and param == keys.right) or (nMod == 1 and param == keys.f) then\
+        -- Right\
+        if nPos < #sLine then\
+          -- Move right\
+          clear()\
+          nPos = nPos + 1\
+          recomplete()\
+          redraw()\
+        else\
+          -- Accept autocomplete\
+          acceptCompletion()\
+        end\
+      elseif nMod == 2 and param == keys.b then\
+        -- Word left\
+        local nNewPos = prevWord()\
+        if nNewPos ~= nPos then\
+          clear()\
+          nPos = nNewPos\
+          recomplete()\
+          redraw()\
+        end\
+      elseif nMod == 2 and param == keys.f then\
+        -- Word right\
+        local nNewPos = nextWord()\
+        if nNewPos ~= nPos then\
+          clear()\
+          nPos = nNewPos\
+          recomplete()\
+          redraw()\
+        end\
+      elseif (nMod == 0 and (param == keys.up or param == keys.down)) or (nMod == 1 and (param == keys.p or param == keys.n)) then\
+        -- Up or down\
+        if nCompletion then\
+          -- Cycle completions\
+          clear()\
+          if param == keys.up or param == keys.p then\
+            nCompletion = nCompletion - 1\
+            if nCompletion < 1 then\
+              nCompletion = #tCompletions\
+            end\
+          elseif param == keys.down or param == keys.n then\
+            nCompletion = nCompletion + 1\
+            if nCompletion > #tCompletions then\
+              nCompletion = 1\
+            end\
+          end\
+          redraw()\
+        elseif _tHistory then\
+          -- Cycle history\
+          clear()\
+          if param == keys.up or param == keys.p then\
+            -- Up\
+            if nHistoryPos == nil then\
+              if #_tHistory > 0 then\
+                nHistoryPos = #_tHistory\
+              end\
+            elseif nHistoryPos > 1 then\
+              nHistoryPos = nHistoryPos - 1\
+            end\
+          elseif param == keys.down or param == keys.n then\
+            -- Down\
+            if nHistoryPos == #_tHistory then\
+              nHistoryPos = nil\
+            elseif nHistoryPos ~= nil then\
+              nHistoryPos = nHistoryPos + 1\
+            end\
+          end\
+          if nHistoryPos then\
+            sLine = _tHistory[nHistoryPos]\
+            nPos, nScroll = #sLine, 0\
+          else\
+            sLine = \"\"\
+            nPos, nScroll = 0, 0\
+          end\
+          uncomplete()\
+          redraw()\
+        end\
+      elseif nMod == 0 and param == keys.backspace then\
+        -- Backspace\
+        if nPos > 0 then\
+          clear()\
+          sLine = string.sub(sLine, 1, nPos - 1) .. string.sub(sLine, nPos + 1)\
+          nPos = nPos - 1\
+          if nScroll > 0 then nScroll = nScroll - 1 end\
+          recomplete()\
+          redraw()\
+        end\
+      elseif (nMod == 0 and param == keys.home) or (nMod == 1 and param == keys.a) then\
+        -- Home\
+        if nPos > 0 then\
+          clear()\
+          nPos = 0\
+          recomplete()\
+          redraw()\
+        end\
+      elseif nMod == 0 and param == keys.delete then\
+        -- Delete\
+        if nPos < #sLine then\
+          clear()\
+          sLine = string.sub(sLine, 1, nPos) .. string.sub(sLine, nPos + 2)\
+          recomplete()\
+          redraw()\
+        end\
+      elseif (nMod == 0 and param == keys[\"end\"]) or (nMod == 1 and param == keys.e) then\
+        -- End\
+        if nPos < #sLine then\
+          clear()\
+          nPos = #sLine\
+          recomplete()\
+          redraw()\
+        end\
+      elseif nMod == 1 and param == keys.u then\
+        -- Delete from cursor to beginning of line\
+        if nPos > 0 then\
+          clear()\
+          sLine = sLine:sub(nPos + 1)\
+          nPos = 0\
+          recomplete()\
+          redraw()\
+        end\
+      elseif nMod == 1 and param == keys.k then\
+        -- Delete from cursor to end of line\
+        if nPos < #sLine then\
+          clear()\
+          sLine = sLine:sub(1, nPos)\
+          nPos = #sLine\
+          recomplete()\
+          redraw()\
+        end\
+      elseif nMod == 2 and param == keys.d then\
+        -- Delete from cursor to end of next word\
+        if nPos < #sLine then\
+            local nNext = nextWord()\
+            if nNext ~= nPos then\
+              clear()\
+              sLine = sLine:sub(1, nPos) .. sLine:sub(nNext + 1)\
+              recomplete()\
+              redraw()\
+            end\
+        end\
+      elseif nMod == 1 and param == keys.w then\
+        -- Delete from cursor to beginning of previous word\
+        if nPos > 0 then\
+          local nPrev = prevWord(nPos)\
+          if nPrev ~= nPos then\
+            clear()\
+            sLine = sLine:sub(1, nPrev) .. sLine:sub(nPos + 1)\
+            nPos = nPrev\
+            recomplete()\
+            redraw()\
+          end\
+        end\
+      elseif nMod == 0 and param == keys.tab then\
+        -- Tab (accept autocomplete)\
+        acceptCompletion()\
+      end\
+    elseif sEvent == \"key_up\" then\
+      -- Update the status of the modifier flag\
+      if param == keys.leftCtrl or param == keys.rightCtrl or param == keys.leftAlt or param == keys.rightAlt then\
+        tDown[param] = false\
+        updateModifier()\
+      end\
+    elseif sEvent == \"mouse_click\" or sEvent == \"mouse_drag\" and param == 1 then\
+      local _, cy = term.getCursorPos()\
+      if param2 == cy then\
+        -- We first clamp the x position with in the start and end points\
+        -- to ensure we don't scroll beyond the visible region.\
+        local x = clamp(param1, sx, w)\
+\
+        -- Then ensure we don't scroll beyond the current line\
+        nPos = clamp(nScroll + x - sx, 0, #sLine)\
+\
+        redraw()\
+      end\
+    elseif sEvent == \"term_resize\" then\
+      -- Terminal resized\
+      w = term.getSize()\
+      redraw()\
+    end\
+  end\
+\
+  local _, cy = term.getCursorPos()\
+  term.setCursorBlink(false)\
+  term.setCursorPos(w + 1, cy)\
+  print()\
+\
+  return sLine\
+end\
+\
+return {\
+  description =\
+    \"This module extends the default read function, adding keybindings similar to \" ..\
+    \"those provided by Emacs or GNU readline as well as additional configuration options.\",\
+\
+  dependencies = {},\
+\
+  settings = {\
+    {\
+      name = \"mbs.readline.enabled\",\
+      description = \"Whether the readline module is enabled.\",\
+      default = true,\
+    },\
+    {\
+      name = \"mbs.readline.complete_bg\",\
+      description = \"The background colour for completions.\",\
+      default = \"default\",\
+    },\
+    {\
+      name = \"mbs.readline.complete_fg\",\
+      description = \"The foreground colour for completions.\",\
+      default = \"grey\",\
+    }\
+  },\
+\
+  enabled = function() return settings.get(\"mbs.readline.enabled\") end,\
+\
+  setup = function()\
+    complete_bg = colour_table[settings.get(\"mbs.readline.complete_bg\")] or -1\
+    complete_fg = colour_table[settings.get(\"mbs.readline.complete_fg\")] or -1\
+\
+    _G.read = read\
+  end,\
+}",
+  },
+  {
+    ".mbs/modules/shell.lua",
+    "local function lib_load(path, name)\
+  if not _G[name] then\
+    os.loadAPI(fs.combine(path, \"lib/\" .. name .. \".lua\"))\
+    if not _G[name] then _G[name] = _G[name .. \".lua\"] end\
+  end\
+end\
+\
+return {\
+  description = \"Replaces the shell with an advanced version.\",\
+\
+  dependencies = {\
+    \"bin/clear.lua\",\
+    \"bin/shell.lua\",\
+    \"lib/blit_window.lua\",\
+    \"lib/scroll_window.lua\",\
+    \"lib/stack_trace.lua\",\
+  },\
+\
+  -- When updating the defaults, one should also update bin/shell.lua\
+  settings = {\
+    {\
+      name = \"mbs.shell.enabled\",\
+      description = \"Whether the extended shell is enabled.\",\
+      default = true,\
+    },\
+    {\
+      name = \"mbs.shell.history_file\",\
+      description = \"The file to save history to. Set to false to disable.\",\
+      default = \".shell_history\",\
+    },\
+    {\
+      name = \"mbs.shell.history_max\",\
+      description = \"The maximum size of the history file\",\
+      default = 1e4,\
+    },\
+    {\
+      name = \"mbs.shell.scroll_max\",\
+      description = \"The maximum size of the scrollback\",\
+      default = 1e3,\
+    },\
+    {\
+      name = \"mbs.shell.traceback\",\
+      description = \"Show an error traceback when a program errors\",\
+      default = true,\
+    },\
+  },\
+\
+  enabled = function() return settings.get(\"mbs.shell.enabled\") end,\
+\
+  setup = function(path)\
+    lib_load(path, \"scroll_window\")\
+    lib_load(path, \"blit_window\")\
+    lib_load(path, \"stack_trace\")\
+\
+    shell.setAlias(\"shell\", \"/\" .. fs.combine(path, \"bin/shell.lua\"))\
+    shell.setAlias(\"clear\", \"/\" .. fs.combine(path, \"bin/clear.lua\"))\
+\
+    shell.setCompletionFunction(fs.combine(path, \"bin/shell.lua\"), function(shell, index, text, previous)\
+      if index == 1 then return shell.completeProgram(text) end\
+    end)\
+  end,\
+\
+  startup = function()\
+    shell.run(\"shell\")\
+    shell.exit()\
+  end,\
+}",
+  },
+  {
+    "installer",
+    "h = fs.open(\"startup\", \"a\")\
+h.writeLine(\"shell.run('mbs startup')\")\
+h.close()",
+  },
+  {
+    "mbs",
+    "local arg = table.pack(...)\
+local root_dir = \".mbs\"\
+local rom_dir = \"rom/.mbs\"\
+local install_dir = fs.exists(root_dir) and root_dir or rom_dir\
+local repo_url = \"https://raw.githubusercontent.com/SquidDev-CC/mbs/master/\"\
+\
+--- Write a string with the given colour to the terminal\
+local function write_coloured(colour, text)\
+  local old = term.getTextColour()\
+  term.setTextColour(colour)\
+  write(text)\
+  term.setTextColour(old)\
+end\
+\
+--- Print usage for this program\
+local commands = { \"install\", \"modules\", \"module\", \"download\" }\
+local function print_usage()\
+  local name = fs.getName(shell.getRunningProgram()):gsub(\"%.lua$\", \"\")\
+  write_coloured(colours.cyan, name .. \" modules  \") print(\"Print the status of all modules\")\
+  write_coloured(colours.cyan, name .. \" module   \") print(\"Print information about a given module\")\
+  write_coloured(colours.cyan, name .. \" install  \") print(\"Download all modules and create a startup file\")\
+  write_coloured(colours.cyan, name .. \" download \") print(\"Download all modules WITHOUT creating a startup file\")\
+end\
+\
+--- Attempt to load a module from the given path, returning the module or false\
+-- and an error message.\
+local function load_module(path)\
+  if fs.isDir(path) then return false, \"Invalid module (is directory)\" end\
+\
+  local fn, err = loadfile(path, _ENV)\
+  if not fn then return false, \"Invalid module (\" .. err .. \")\" end\
+\
+  local ok, res = pcall(fn)\
+  if not ok then return false, \"Invalid module (\" .. res .. \")\" end\
+\
+  if type(res) ~= \"table\" or type(res.description) ~= \"string\" or type(res.enabled) ~= \"function\" then\
+    return false, \"Malformed module\"\
+  end\
+\
+  return res\
+end\
+\
+--- Setup all modules\
+local function setup_module(module)\
+  for _, setting in ipairs(module.settings) do\
+    if settings.get(setting.name) == nil then\
+      settings.set(setting.name, setting.default)\
+    end\
+  end\
+end\
+\
+--- Download a set of files\
+local function download_files(files)\
+  if #files == 0 then return end\
+\
+  local urls = {}\
+  for _, file in ipairs(files) do\
+    local url = repo_url .. file\
+    http.request(url)\
+    urls[url] = file\
+  end\
+\
+  while true do\
+    local event, url, arg1 = os.pullEvent()\
+    if event == \"http_success\" and urls[url] then\
+      local handle = fs.open(fs.combine(root_dir, urls[url]), \"w\")\
+      handle.write(arg1.readAll())\
+      handle.close()\
+      arg1.close()\
+\
+      urls[url] = nil\
+      if next(urls) == nil then return end\
+    elseif event == \"http_failure\" and urls[url] then\
+      error(\"Could not download \" .. urls[url], 0)\
+    end\
+  end\
+end\
+\
+--- read completion helper, completes text using the given options\
+local function complete_multi(text, options, add_spaces)\
+  local results = {}\
+  for n = 1, #options do\
+    local option = options[n]\
+    if #option + (add_spaces and 1 or 0) > #text and option:sub(1, #text) == text then\
+      local result = option:sub(#text + 1)\
+      if add_spaces then\
+        results[#results + 1] = result .. \" \"\
+      else\
+        results[#results + 1] = result\
+      end\
+    end\
+  end\
+  return results\
+end\
+\
+--- Append an object to a list if it is not already contained within\
+local function add_unique(list, x)\
+  for i = 1, #list do if list[i] == x then return end end\
+  list[#list + 1] = x\
+end\
+\
+local function load_all_modules()\
+  -- Load all modules and update them.\
+  local module_dir = fs.combine(root_dir, \"modules\")\
+  local modules = fs.isDir(module_dir) and fs.list(module_dir) or {}\
+\
+  -- Add the default modules if not already there.\
+  for _, module in ipairs { \"lua.lua\", \"pager.lua\", \"readline.lua\", \"shell.lua\" } do\
+    add_unique(modules, module)\
+  end\
+\
+  local files = {}\
+  for i = 1, #modules do files[i] = \"modules/\" .. modules[i] end\
+  download_files(files)\
+\
+  -- Scan for dependencies in enabled modules, downloading them as well\
+  local deps = {}\
+  for i = 1, #files do\
+    local module = load_module(fs.combine(root_dir, files[i]))\
+    if module then\
+      setup_module(module)\
+      if module.enabled() then\
+        for _, dep in ipairs(module.dependencies) do deps[#deps + 1] = dep end\
+      end\
+    end\
+  end\
+  download_files(deps)\
+end\
+\
+if arg.n == 0 then\
+  printError(\"Expected some command\")\
+  print_usage()\
+  error()\
+elseif arg[1] == \"download\" then\
+  load_all_modules()\
+elseif arg[1] == \"install\" then\
+  load_all_modules()\
+\
+  -- If we're on CC 1.80 then we'll create a startup directory and use that.\
+  if fs.exists(\"rom/startup.lua\") then\
+    -- Move the existing startup file if required\
+    if fs.exists(\"startup\") and not fs.isDir(\"startup\")then\
+      local handle = fs.open(\"startup\", \"r\")\
+      local contents = handle.readAll()\
+      handle.close()\
+      fs.delete(\"startup\")\
+\
+      handle = fs.open(\"startup/00_init.lua\", \"w\")\
+      handle.write(contents)\
+      handle.close()\
+    end\
+\
+    -- We'll write at the last posible position\
+    local handle = fs.open(\"startup/99_mbs.lua\", \"w\")\
+    handle.writeLine((\"shell.run(%q)\"):format(shell.getRunningProgram() .. \" startup\"))\
+    handle.close()\
+  else\
+    -- Otherwise just append to the startup file\
+\
+    -- A rather ugly hack to determine if we have an uncommented \"mbs startup\" somewhere\
+    -- in the file.\
+    -- Note this doesn't handle block comments, but it's good enough.\
+    local contains = false\
+    local body = (\"shell.run(%q)\"):format(shell.getRunningProgram() .. \" startup\")\
+    if fs.exists(\"startup\") then\
+      local handle = fs.open(\"startup\", \"r\")\
+      contains = (\"\\n\" .. handle.readAll() .. \"\\n\"):find(\"\\n\" .. body .. \"\\n\", 1, true)\
+      handle.close()\
+    end\
+\
+    -- If we've no existing \"mbs startup\" then append it to the end.\
+    if not contains then\
+      local handle = fs.open(\"startup\", \"a\")\
+      handle.writeLine(body)\
+      handle.close()\
+    end\
+  end\
+\
+  print(\"Please reboot to apply changes.\")\
+elseif arg[1] == \"startup\" then\
+  -- Gather a list of all modules\
+  local module_dir = fs.combine(install_dir, \"modules\")\
+  local files = fs.isDir(module_dir) and fs.list(module_dir) or {}\
+\
+  -- Load those modules and determine which are enabled.\
+  local enabled = {}\
+  local module_names = {}\
+  for _, file in ipairs(files) do\
+    local module = load_module(fs.combine(module_dir, file))\
+    if module then\
+      setup_module(module)\
+      module_names[#module_names + 1] = file:gsub(\"%.lua$\", \"\")\
+      if module.enabled() then enabled[#enabled + 1] = module end\
+    end\
+  end\
+\
+  shell.setCompletionFunction(shell.getRunningProgram(), function(shell, index, text, previous)\
+    if index == 1 then\
+      return complete_multi(text, commands, true)\
+    elseif index == 2 and previous[#previous] == \"module\" then\
+      return complete_multi(text, module_names, false)\
+    end\
+  end)\
+\
+  -- Setup those modules\
+  for _, module in ipairs(enabled) do\
+    if type(module.setup) == \"function\" then module.setup(install_dir) end\
+  end\
+\
+  -- And run the startup hook if needed\
+  for _, module in ipairs(enabled) do\
+    if type(module.startup) == \"function\" then module.startup(install_dir) end\
+  end\
+\
+elseif arg[1] == \"modules\" then\
+  local module_dir = fs.combine(install_dir, \"modules\")\
+  local files = fs.isDir(module_dir) and fs.list(module_dir) or {}\
+  local found_any = false\
+\
+  for _, file in ipairs(files) do\
+    local res, err = load_module(fs.combine(module_dir, file))\
+    write_coloured(colours.cyan, file:gsub(\"%.lua$\", \"\") .. \" \")\
+    if res then\
+      write(res.description)\
+      if res.enabled() then\
+        write_coloured(colours.green, \" (enabled)\")\
+      else\
+        write_coloured(colours.red, \" (disabled)\")\
+      end\
+      found_any = true\
+    else\
+      write_coloured(colours.red, err)\
+    end\
+\
+    print()\
+  end\
+\
+  if not found_any then error(\"No modules found. Maybe try running the `install` command?\", 0) end\
+elseif arg[1] == \"module\" then\
+  if not arg[2] then error(\"Expected module name\", 0) end\
+  local module, err = load_module(fs.combine(install_dir, fs.combine(\"modules\", arg[2] .. \".lua\")))\
+  if not module then error(err, 0) end\
+\
+  write(module.description)\
+  if module.enabled() then\
+    write_coloured(colours.green, \" (enabled)\")\
+  else\
+    write_coloured(colours.red, \" (disabled)\")\
+  end\
+  print()\
+\
+  print()\
+\
+  for _, setting in ipairs(module.settings) do\
+    local value = settings.get(setting.name)\
+    write_coloured(colours.cyan, setting.name)\
+    write(\" \" .. setting.description .. \" (\")\
+    write_coloured(colours.yellow, textutils.serialise(value))\
+    if value ~= setting.default then\
+      write(\", default is \")\
+      write_coloured(colours.yellow, textutils.serialise(setting.default))\
+    end\
+\
+    write(\")\")\
+    print()\
+  end\
+else\
+  printError(\"Unknown command\")\
+  print_usage()\
+  error()\
+end",
+  },
+  meta = {
+    dependencies = "none",
+    info = "MBS also called. Mildly Better Shell improves\
+the shell environment drastically with improvements\
+such as semi-autocompletion and mostly scrolling",
+  },
+}
